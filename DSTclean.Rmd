@@ -1,0 +1,495 @@
+---
+title: "DST cleaning"
+author: "Logan Schneider"
+date: "August 5, 2018"
+output: html_document
+---
+
+    ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown  
+```{r FYI, echo=FALSE}
+#print("Analyses perfomed using:")
+#R.Version()$version.string
+print("lubridate,zoo,ggplot2,RColorBrewer,car,agricolae")
+library(lubridate)
+library(zoo)
+library(ggplot2)
+library(RColorBrewer)
+library(car)
+library(agricolae)
+library(scales)
+print("Please use the following citation information")
+citation()
+
+sessionInfo()
+```
+  
+Data processing  
+#useful calculator: http://www.webexhibits.org/daylightsaving/b.html  
+#date manipulations with POSIXct variables: https://rstudio-pubs-static.s3.amazonaws.com/28038_1bcb9aa80ca84f27ace07d612872861a.html  
+#=====================================#
+```{r Data processing}
+#read in Sz entry dataset
+#install.packages("lubridate")
+#library("lubridate")
+Sz <- read.csv("STFullExportMignot_20170317.csv_Seizures.txt",stringsAsFactors = F)
+names(Sz)
+#convert Date_Time to POSIXct format
+#alternatively could use install.packages("anytime")
+#library("anytime")
+Sz$datetime <- as.POSIXct(Sz$Date_Time, format="%Y-%m-%d %H:%M:%S")
+summary(year(Sz$datetime))
+#export was March 2017, and also don't care about seizures from before origination date Dec 2007
+Sz08to17 <- Sz[which(year(Sz$datetime)>2007 & year(Sz$datetime)<2018),]
+summary(year(Sz08to17$datetime))
+paste("Entries dropped: ",dim(Sz)[1]-dim(Sz08to17)[1]," (",round((dim(Sz)[1]-dim(Sz08to17)[1])*100/dim(Sz)[1],2),"%)",sep = "")
+#create sleep period and daytime categories
+#first add weekdays
+Sz08to17$wkday <- weekdays(Sz08to17$datetime)
+#overnight defined as 21:00-07:00, to capture the general sense of sleep periods for most individuals
+Sz08to17$overnight <- ifelse(hour(Sz08to17$datetime)<7 | hour(Sz08to17$datetime)>21,1,0)
+#confirm
+head(Sz08to17[,c("datetime","overnight")],10)
+#define the start of the overnight seizures
+Sz08to17$overnightStart <- ifelse(hour(Sz08to17$datetime)<7,weekdays(Sz08to17$datetime-3600*24),ifelse(hour(Sz08to17$datetime)>21,weekdays(Sz08to17$datetime),"NA"))
+#confirm
+head(Sz08to17[,c("datetime","wkday","overnightStart")],10)
+#define the week of the year
+Sz08to17$weeknum <- isoweek(Sz08to17$datetime)
+#confirm
+tail(Sz08to17[,c("datetime","weeknum","wkday")],15)
+#convert seizure duration to seconds only
+Sz08to17$dur_secs <- Sz08to17$length_hr*3600+Sz08to17$length_min*60+Sz08to17$length_sec
+#remove seizures with negative duration
+Sz08to17 <- Sz08to17[which(Sz08to17$dur_secs>0),]
+#confirm
+head(Sz08to17[,c("length_hr","length_min","length_sec","dur_secs")],10)
+summary(Sz08to17[,c("length_hr","length_min","length_sec","dur_secs")])
+```
+  
+Adding daylight saving information for each year, using methods from:  
+```{r getting DST/ST information}
+#http://stackoverflow.com/questions/26226453/lubridate-get-date-of-certain-day-in-a-month  
+#Most of the US begins DST at 02:00 on the second Sunday in March ends on the first Sunday in November  
+#install.packages("zoo")
+#library("zoo")
+Sz08to17$inDST <- as.POSIXlt(Sz08to17$datetime)$isdst
+#confirm
+tail(Sz08to17[,c("datetime","inDST")],15)
+#determine date of DSTon and DSToff for the year
+#and calculate the days since either, depending upon whether in DST or not
+#the multiple nested loops makes this a HUGE time commitment (12-13 hrs of processing)
+
+###=====This one takes a little while to run=====###
+for(i in 1:length(Sz08to17$datetime)) {
+    if(Sz08to17[i,"inDST"]==1) {
+        #this calculates the date of the preceding DST transition
+        DSTon <- as.Date(ymd(paste(year(as.POSIXlt(Sz08to17[i,"datetime"])),3,01,sep="-")))
+        DSTon <- as.Date(ifelse(wday(DSTon)==1,DSTon+7,DSTon+(15-wday(DSTon))))
+        #this calculates the days since the preceding DST transition (relevant for analyses of first week's days: 0-6::Sun-Sat)
+        Sz08to17[i,"DSTonday"] <- as.numeric(round(as.Date(Sz08to17[i,"datetime"])-as.Date(as.POSIXct(DSTon)),0))
+        Sz08to17[i,"DSToffday"] <- "NA"
+    } else {
+        if(month(Sz08to17[i,"datetime"])>3) {
+            #this calculates the date of the preceding ST transition
+            DSToff <- as.Date(ymd(paste(year(as.POSIXlt(Sz08to17[i,"datetime"])),11,01,sep="-")))
+            DSToff <- as.Date(ifelse(wday(DSToff)==1,DSToff,DSToff+(8-wday(DSToff))))
+            #this calculates the days since the preceding ST transition (relevant for analyses of first week's days: 0-6::Sun-Sat)
+            Sz08to17[i,"DSToffday"] <- as.numeric(round(as.Date(Sz08to17[i,"datetime"])-as.Date(as.POSIXct(DSToff)),0))
+        } else {
+            #this calculates the date of the preceding ST transition
+            DSToff <- as.Date(ymd(paste(year(as.POSIXlt(Sz08to17[i,"datetime"]))-1,11,01,sep="-")))
+            DSToff <- as.Date(ifelse(wday(DSToff)==1,DSToff,DSToff+(8-wday(DSToff))))
+            #this calculates the days since the preceding ST transition (relevant for analyses of first week's days: 0-6::Sun-Sat)
+            Sz08to17[i,"DSToffday"] <- as.numeric(round(as.Date(Sz08to17[i,"datetime"])-as.Date(as.POSIXct(DSToff)),0))
+        }
+        Sz08to17[i,"DSTonday"] <- "NA"
+    }
+}
+###=====This one takes a little while to run=====###
+
+#adding week and day number for DST/ST transitions, so can align to t0=transition time
+###=====This one takes a little while to run=====###
+for(i in 1:length(Sz08to17$datetime)) {
+    #this calculates the date of the DST transition for the year
+    DSTon <- as.Date(ymd(paste(year(as.POSIXlt(Sz08to17[i,"datetime"])),3,01,sep="-")))
+    DSTon <- as.Date(ifelse(wday(DSTon)==1,DSTon+7,DSTon+(15-wday(DSTon))))
+    Sz08to17[i,"DSTweek"] <- as.numeric(week(DSTon))
+    Sz08to17[i,"DSTday"] <- as.numeric(yday(DSTon))
+    #this calculates the date of the ST transition for the year
+    DSToff <- as.Date(ymd(paste(year(as.POSIXlt(Sz08to17[i,"datetime"])),11,01,sep="-")))
+    DSToff <- as.Date(ifelse(wday(DSToff)==1,DSToff,DSToff+(8-wday(DSToff))))
+    Sz08to17[i,"STweek"] <- as.numeric(week(DSToff))
+    Sz08to17[i,"STday"] <- as.numeric(yday(DSToff))
+}
+###=====This one takes a little while to run=====###
+#because the addition of NAs coerced the numbers to characters, so coerce back
+Sz08to17 <- transform(Sz08to17, DSTonday = as.numeric(DSTonday), DSToffday = as.numeric(DSToffday))
+
+#should be 238 days in DST, so check
+summary(Sz08to17$DSTonday)
+ifelse(238>=max(Sz08to17$DSTonday,na.rm = T) & 0<=min(Sz08to17$DSTonday,na.rm = T),"expected result","needs a check")
+checkON <- Sz08to17[which(Sz08to17$DSTonday==0),]
+summary(Sz08to16$STday-Sz08to16$DSTday) # another verification
+
+#conversely, there could be up to 133 days not in DST, depending upon leap years and calendar year crossings (e.g. Nov 1st, 2015 to March 13th, 2016)
+summary(Sz08to17$DSToffday)
+ifelse(133>=max(Sz08to17$DSToffday,na.rm = T) & 0<=min(Sz08to17$DSToffday,na.rm = T),"expected result","needs a check")
+checkOFF <- Sz08to17[which(Sz08to17$DSToffday==0),]
+```
+  
+Now to determine status epilepticus (in the event of stratified analyses)
+```{r status determination}
+#Define status as >5 min Sz
+###=====This one takes a little while to run=====###
+for(i in 1:nrow(Sz08to17)) {
+    if(Sz08to17[i,"dur_secs"] > 299) {
+        Sz08to17[i,"StatusYN"] <- 1
+        Sz08to17[i,"Statusdur"] <- Sz08to17[i,"dur_secs"]
+    } else {
+        Sz08to17[i,"StatusYN"] <- 0
+        Sz08to17[i,"Statusdur"] <- 0
+    }
+}
+###=====This one takes a little while to run=====###
+
+#OR multiple Sz with inter-Sz interval <5 min with time from start to end of all Sz >5 min
+#Get the dataframe into an order in which the following algorithmic Status Epilepticus checking can work (assumes seizures entered in non-temporal order)
+ordered <- Sz08to17[with(Sz08to17, order(Unlinked_ID, datetime)), ]
+
+#define only those events <5 min apart (giving essentially 91,589 lines to look at, rather than the full 1,409,382)
+###=====This one takes a while to run=====###
+for(i in 2:nrow(ordered)) {
+    ordered[i,"timeFROMlast"] <- as.numeric(difftime(ordered[i,"datetime"],ordered[i-1,"datetime"],units="secs"))-ordered[i-1,"dur_secs"]
+}
+###=====This one takes a while to run=====###
+ordered[1,"timeFROMlast"] <- 0
+
+#run through the rows of the dataframe
+###=====This one takes about 1 day to run=====###
+for(i in 1:(nrow(ordered)-1)) {
+    #only perform this nested looping if <5 min between events (ordered by time within individuals)
+    if(ordered[i+1,"timeFROMlast"] < 300 & ordered[i+1,"timeFROMlast"] > 0) {
+        #start relative index for blocks of similar IDs
+        j <- 1
+        #if IDs are the same from current i and next entry...
+        if(ordered[i,"Unlinked_ID"] == ordered[i+1,"Unlinked_ID"] & i>=j) {
+            #...set ID block range from i to the end with j...
+            j <- rle(ordered[i:nrow(ordered),"Unlinked_ID"])$lengths[1]
+            #...then loop over the ID block
+            for(k in i:i+j-1) {
+                #if date is the same from current k and next entry (within the same ID block)...
+                if(date(ordered[k,"datetime"]) == date(ordered[k+1,"datetime"])) {
+                    #...set date block range from k to second from the end with m...
+                    m <- rle(as.numeric(date(ordered[k:nrow(ordered),"datetime"])))$lengths[1]
+                    #...then loop over the same-date-within-same-ID block
+                    SEstart <- k
+                    SEend <- k
+                    while(k<m) {
+                        #if the time between this and the next Sz is <5 min
+                        if(ordered[k+1,"timeFROMlast"] < 300 & ordered[k+1,"timeFROMlast"] > 0) {
+                            #...set the end of the the Status to the next line
+                            SEend <- k+1
+                        } else {
+                            #...otherwise, end the Status block and calculate total duration
+                            #NOTE: this will only define new Status entries if not able to create a new SEend AND the Status did iterate previously (i.e. SEstart<SEend)
+                            #...set the SEstart->SEend entries to Status Yes (1)
+                            #...and set all to the total "status epilepticus" duration (from start of first to end of last seizure in status series)
+                            if(SEstart<SEend) {
+                                for(p in SEstart:SEend) {
+                                    #this makes all entries for a given status event have duration from start of SEstart's Sz to end of SEend's Sz
+                                    ordered[p,"StatusYN"]<-1
+                                    ordered[p,"Statusdur"]<-as.numeric(ordered[SEend,"datetime"],ordered[SEstart,"datetime"],units="secs")+ordered[SEend,"dur_secs"]
+                                }
+                            }
+                            SEstart <- k+1
+                        }
+                        k <- k+1
+                    }
+                }
+            }
+        }
+    }
+}
+###=====This one takes about 1 day to run=====###
+
+head(ordered[,c("timeFROMlast","Unlinked_ID","datetime")],15)
+tail(ordered[,c("timeFROMlast","Unlinked_ID","datetime")],15)
+
+###################################
+#####TAKES about 2.5hrs TO RUN#####
+###################################
+start_time <- Sys.time()
+thisyeardenom <- 0
+#Establishing aggregating "at risk" counts for each year, with denominator derived from unique IDs up to the end of that year
+for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+    denomdf <- Sz08to16[which(year(Sz08to16$datetime) <= i),"Unlinked_ID"]
+    yearnumer <- length(denomdf)
+    yeardenom <- length(unique(denomdf))
+    Sz08to16[which(year(Sz08to16$datetime) == i),"AtRiskperYEAR"] <- yeardenom
+    Sz08to16[which(year(Sz08to16$datetime) == i),"FreqperYEAR"] <- yearnumer
+    Sz08to16[which(year(Sz08to16$datetime) == i),"IncidenceperYEAR"] <- yearnumer/yeardenom
+    #Establishing aggregating "at risk" counts for each week, with denominator derived from unique IDs up to the end of that week
+    for(j in 1:max(week(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
+        #Get the last date in the week j of year i
+        endweek <- max(Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) <= j),"datetime"])
+        #weeklydf <- Sz08to16[which(year(Sz08to16$datetime) <= i & week(Sz08to16$datetime) <= j),"Unlinked_ID"]
+        #Get Unlinked_ID list up to week j of year i
+        weeklydf <- Sz08to16[which(Sz08to16$datetime <= endweek),"Unlinked_ID"]
+        weeknumer <- nrow(Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),])
+        weekdenom <- length(unique(weeklydf)) + thisyeardenom
+        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"AtRiskperWEEK"] <- weekdenom
+        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"FreqperWEEK"] <- weeknumer
+        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"IncidenceperWEEK"] <- weeknumer/weekdenom
+    }
+    #Establishing aggregating "at risk" counts for each day, with denominator derived from unique IDs up to that day
+    for(j in 1:max(yday(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
+        #Get the last date in the day j of year i
+        endday <- max(Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) <= j),"datetime"])
+        #Get Unlinked_ID list up to day j of year i
+        dailydf <- Sz08to16[which(Sz08to16$datetime <= endday),"Unlinked_ID"]
+        daynumer <- nrow(Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) == j),])
+        daydenom <- length(unique(dailydf)) + thisyeardenom
+        Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) == j),"AtRiskperDAY"] <- daydenom
+        Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) == j),"FreqperDAY"] <- daynumer
+        Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) == j),"IncidenceperDAY"] <- daynumer/daydenom
+    }
+    #This keeps a count of the aggregated count up to this year's end (for adding to next years weekly/daily counts in nested loops)
+    thisyeardenom <- length(unique(denomdf))
+}
+Sys.time() - start_time
+###################################
+#####TAKES about 2.5hrs TO RUN#####
+###################################
+
+#Based on:
+summary(Sz08to16[,56:64])
+#it might be worth eliminating extreme incidences (though averaging and partial week elimination might help)
+write.csv(Sz08to16,file="Sz08to16wIncidence.csv")
+
+for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+    yearlist <- unique(Sz08to16[which(year(Sz08to16$datetime) == i),"Unlinked_ID"])
+    for(j in yearlist) {
+        IDdenom <- nrow(Sz08to16[which(year(Sz08to16$datetime) == i & Sz08to16$Unlinked_ID == j),])
+        Sz08to16[which(year(Sz08to16$datetime) == i & Sz08to16$Unlinked_ID == j),"UID_yearlySz"] <- IDdenom
+    }
+}
+Sz08to16$relIncidenceperYEAR <- Sz08to16$IncidenceperYEAR/Sz08to16$UID_yearlySz
+Sz08to16$relIncidenceperWEEK <- Sz08to16$IncidenceperWEEK/Sz08to16$UID_yearlySz
+Sz08to16$relIncidenceperDAY <- Sz08to16$IncidenceperDAY/Sz08to16$UID_yearlySz
+
+###################################
+#####TAKES about 24hrs TO RUN#####
+###################################
+#Now, feature scale each individual's yearly seizures to [0-1]
+scaleIDs <- unique(Sz08to16$Unlinked_ID) #get list of unique IDs
+for(i in scaleIDs) {
+    #Sz08to16 subset just for this individual
+    scalesub <- Sz08to16[which(Sz08to16$Unlinked_ID == i),c("Unlinked_ID","datetime")]
+    #adding an orderable value of format YYYY.DDD
+    scalesub$year.day <- as.numeric(paste(year(scalesub$datetime),
+                                          formatC(yday(scalesub$datetime),width=3,flag=0),
+                                          sep="."))
+    for(k in min(year(scalesub$datetime)):max(year(scalesub$datetime))) {
+        #Subset for year k
+        fortable <- scalesub[which(year(scalesub$datetime) == k),]
+        #Get seizure counts for each day that had documented seizures by individual i in year k
+        library(data.table)
+        tableofi <- as.data.frame(table(yday(fortable$datetime)))
+        tableofi$Var1 <- as.numeric(as.character(tableofi$Var1)) #converts days back to numeric
+        library(lubridate)
+        #Now with unit vector scaling, in hindsight, partitioning partial/total years was not necessary
+        #NOTE: Unit scaling implicitly accounts for seizure-free days, by not pointing the unit vector into those "dimensions" anyhow
+        if(k < min(year(scalesub$datetime))) { #Skip years in which the person wasn't yet documenting
+        } else { #Starting with the year with individual i's first documented seizure...
+            #...daily seizure counts are scaled to [0-1] based on i's yearly seizure "profusion", by making the whole year's seizure vector downscale to unit length: https://en.wikipedia.org/wiki/Feature_scaling
+            tableofi$Freq <- apply(tableofi[2], MARGIN=2, FUN = function(x) {x / sqrt(sum(x^2))})
+        }
+        
+        for(j in tableofi$Var1) {
+            Sz08to16[which(Sz08to16$Unlinked_ID == i & year(Sz08to16$datetime) == k & yday(Sz08to16$datetime) == j),"ScaledSzCount"] <- tableofi[which(tableofi$Var1 == j),2][1]
+        }
+    }
+}
+###################################
+#####TAKES about 24hrs TO RUN#####
+###################################
+
+for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+    #Calculating "scaled" incidences using sum of individually-scaled seizure counts
+    for(j in 1:max(week(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
+        #Get the scaled seizures for week j of year i
+        weeklydf <- Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
+        #-nrow(weeklydf) gives the total count of seizures in week i (original $IncidenceperWEEK)
+        #-sum(weeklydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
+        weeknumer <- sum(unique(weeklydf$ScaledSzCount))
+        #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
+        weekdenom <- mean(mean(Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
+        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
+    }
+    #Calculating "scaled" incidences using sum of individually-scaled seizure counts
+    for(j in 1:max(yday(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
+        #Get the scaled seizures for day j of year i
+        dailydf <- Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
+        #-nrow(dailydf) gives the total count of seizures in day i (original $IncidenceperDAY)
+        #-sum(dailydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
+        daynumer <- sum(unique(dailydf$ScaledSzCount))
+        #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
+        daydenom <- mean(Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) == j),"AtRiskperDAY"]) #They're all the same number, so this just gets that number
+        Sz08to16[which(year(Sz08to16$datetime) == i & yday(Sz08to16$datetime) == j),"scldIncidenceperDAY"] <- daynumer/daydenom
+    }
+}
+    
+write.csv(Sz08to16,file="Sz08to16wInc&RelRates.csv")
+
+###NOTE: to read in the saved csv files:
+###Sz08to16 <- read.csv("Sz08to16wInc&RelRates.csv", stringsAsFactors = F)
+###Sz08to16 <- Sz08to16[,-1]
+###Sz08to16$datetime <- as.POSIXct(Sz08to16$datetime)
+
+###CLEANED THE DATA: https://docs.google.com/document/d/1-hO9j-3Zj9mUBu6ukHHilunIDDx_0U7cExPqzt5BA8w/edit?ts=58d2cd60
+#personal notes on specifics to my analysis (but check/clean on all aspects in Google)
+```
+  
+Day and Night seizure counts  
+```{r Day vs Night split of dataset}
+Day08to16 <- Sz08to16[which(Sz08to16$overnight == 0),]
+Night08to16 <- Sz08to16[which(Sz08to16$overnight == 1),]
+
+###################################
+#####TAKES about 24hrs TO RUN#####
+###################################
+#Now, feature scale each individual's yearly seizures to [0-1]
+scaleIDs <- unique(Day08to16$Unlinked_ID) #get list of unique IDs
+for(i in scaleIDs) {
+    #Day08to16 subset just for this individual
+    scalesub <- Day08to16[which(Day08to16$Unlinked_ID == i),c("Unlinked_ID","datetime")]
+    #adding an orderable value of format YYYY.DDD
+    scalesub$year.day <- as.numeric(paste(year(scalesub$datetime),
+                                          formatC(yday(scalesub$datetime),width=3,flag=0),
+                                          sep="."))
+    for(k in min(year(scalesub$datetime)):max(year(scalesub$datetime))) {
+        #Subset for year k
+        fortable <- scalesub[which(year(scalesub$datetime) == k),]
+        #Get seizure counts for each day that had documented seizures by individual i in year k
+        library(data.table)
+        tableofi <- as.data.frame(table(yday(fortable$datetime)))
+        tableofi$Var1 <- as.numeric(as.character(tableofi$Var1)) #converts days back to numeric
+        library(lubridate)
+        #Now with unit vector scaling, in hindsight, partitioning partial/total years was not necessary
+        #NOTE: Unit scaling implicitly accounts for seizure-free days, by not pointing the unit vector into those "dimensions" anyhow
+        if(k < min(year(scalesub$datetime))) { #Skip years in which the person wasn't yet documenting
+        } else { #Starting with the year with individual i's first documented seizure...
+            #...daily seizure counts are scaled to [0-1] based on i's yearly seizure "profusion", by making the whole year's seizure vector downscale to unit length: https://en.wikipedia.org/wiki/Feature_scaling
+            tableofi$Freq <- apply(tableofi[2], MARGIN=2, FUN = function(x) {x / sqrt(sum(x^2))})
+        }
+        
+        for(j in tableofi$Var1) {
+            Day08to16[which(Day08to16$Unlinked_ID == i & year(Day08to16$datetime) == k & yday(Day08to16$datetime) == j),"DAYScaledSzCount"] <- tableofi[which(tableofi$Var1 == j),2][1]
+        }
+    }
+}
+###################################
+#####TAKES about 24hrs TO RUN#####
+###################################
+
+for(i in min(year(Day08to16$datetime)):max(year(Day08to16$datetime))) {
+    #Calculating "scaled" incidences using sum of individually-scaled seizure counts
+    for(j in 1:max(week(Day08to16[which(year(Day08to16$datetime) == i),"datetime"]))) {
+        #Get the scaled seizures for week j of year i
+        weeklydf <- Day08to16[which(year(Day08to16$datetime) == i & week(Day08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
+        #-nrow(weeklydf) gives the total count of seizures in week i (original $IncidenceperWEEK)
+        #-sum(weeklydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
+        weeknumer <- sum(unique(weeklydf$ScaledSzCount))
+        #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
+        weekdenom <- mean(mean(Day08to16[which(year(Day08to16$datetime) == i & week(Day08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
+        Day08to16[which(year(Day08to16$datetime) == i & week(Day08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
+    }
+    #Calculating "scaled" incidences using sum of individually-scaled seizure counts
+    for(j in 1:max(yday(Day08to16[which(year(Day08to16$datetime) == i),"datetime"]))) {
+        #Get the scaled seizures for day j of year i
+        dailydf <- Day08to16[which(year(Day08to16$datetime) == i & yday(Day08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
+        #-nrow(dailydf) gives the total count of seizures in day i (original $IncidenceperDAY)
+        #-sum(dailydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
+        daynumer <- sum(unique(dailydf$ScaledSzCount))
+        #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
+        daydenom <- mean(Day08to16[which(year(Day08to16$datetime) == i & yday(Day08to16$datetime) == j),"AtRiskperDAY"]) #They're all the same number, so this just gets that number
+        Day08to16[which(year(Day08to16$datetime) == i & yday(Day08to16$datetime) == j),"scldIncidenceperDAY"] <- daynumer/daydenom
+    }
+}
+    
+write.csv(Day08to16,file="DAY08to16wInc&RelRates.csv")
+
+###################################
+#####TAKES about 24hrs TO RUN#####
+###################################
+#Now, feature scale each individual's yearly seizures to [0-1]
+scaleIDs <- unique(Night08to16$Unlinked_ID) #get list of unique IDs
+for(i in scaleIDs) {
+    #Night08to16 subset just for this individual
+    scalesub <- Night08to16[which(Night08to16$Unlinked_ID == i),c("Unlinked_ID","datetime")]
+    #adding an orderable value of format YYYY.DDD
+    scalesub$year.day <- as.numeric(paste(year(scalesub$datetime),
+                                          formatC(yday(scalesub$datetime),width=3,flag=0),
+                                          sep="."))
+    for(k in min(year(scalesub$datetime)):max(year(scalesub$datetime))) {
+        #Subset for year k
+        fortable <- scalesub[which(year(scalesub$datetime) == k),]
+        #Get seizure counts for each day that had documented seizures by individual i in year k
+        library(data.table)
+        tableofi <- as.data.frame(table(yday(fortable$datetime)))
+        tableofi$Var1 <- as.numeric(as.character(tableofi$Var1)) #converts days back to numeric
+        library(lubridate)
+        #Now with unit vector scaling, in hindsight, partitioning partial/total years was not necessary
+        #NOTE: Unit scaling implicitly accounts for seizure-free days, by not pointing the unit vector into those "dimensions" anyhow
+        if(k < min(year(scalesub$datetime))) { #Skip years in which the person wasn't yet documenting
+        } else { #Starting with the year with individual i's first documented seizure...
+            #...daily seizure counts are scaled to [0-1] based on i's yearly seizure "profusion", by making the whole year's seizure vector downscale to unit length: https://en.wikipedia.org/wiki/Feature_scaling
+            tableofi$Freq <- apply(tableofi[2], MARGIN=2, FUN = function(x) {x / sqrt(sum(x^2))})
+        }
+        
+        for(j in tableofi$Var1) {
+            Night08to16[which(Night08to16$Unlinked_ID == i & year(Night08to16$datetime) == k & yday(Night08to16$datetime) == j),"NIGHTScaledSzCount"] <- tableofi[which(tableofi$Var1 == j),2][1]
+        }
+    }
+}
+###################################
+#####TAKES about 24hrs TO RUN#####
+###################################
+
+for(i in min(year(Night08to16$datetime)):max(year(Night08to16$datetime))) {
+    #Calculating "scaled" incidences using sum of individually-scaled seizure counts
+    for(j in 1:max(week(Night08to16[which(year(Night08to16$datetime) == i),"datetime"]))) {
+        #Get the scaled seizures for week j of year i
+        weeklydf <- Night08to16[which(year(Night08to16$datetime) == i & week(Night08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
+        #-nrow(weeklydf) gives the total count of seizures in week i (original $IncidenceperWEEK)
+        #-sum(weeklydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
+        weeknumer <- sum(unique(weeklydf$ScaledSzCount))
+        #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
+        weekdenom <- mean(mean(Night08to16[which(year(Night08to16$datetime) == i & week(Night08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
+        Night08to16[which(year(Night08to16$datetime) == i & week(Night08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
+    }
+    #Calculating "scaled" incidences using sum of individually-scaled seizure counts
+    for(j in 1:max(yday(Night08to16[which(year(Night08to16$datetime) == i),"datetime"]))) {
+        #Get the scaled seizures for day j of year i
+        dailydf <- Night08to16[which(year(Night08to16$datetime) == i & yday(Night08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
+        #-nrow(dailydf) gives the total count of seizures in day i (original $IncidenceperDAY)
+        #-sum(dailydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
+        daynumer <- sum(unique(dailydf$ScaledSzCount))
+        #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
+        daydenom <- mean(Night08to16[which(year(Night08to16$datetime) == i & yday(Night08to16$datetime) == j),"AtRiskperDAY"]) #They're all the same number, so this just gets that number
+        Night08to16[which(year(Night08to16$datetime) == i & yday(Night08to16$datetime) == j),"scldIncidenceperDAY"] <- daynumer/daydenom
+    }
+}
+    
+write.csv(Night08to16,file="NIGHT08to16wInc&RelRates.csv")
+```
