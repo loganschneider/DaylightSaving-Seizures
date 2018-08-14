@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r FYI, echo=FALSE}
 #print("Analyses perfomed using:")
 #R.Version()$version.string
-print("lubridate,zoo,ggplot2,RColorBrewer,car,agricolae")
+print("lubridate,zoo,ggplot2,RColorBrewer,car,agricolae,scales")
 library(lubridate)
 library(zoo)
 library(ggplot2)
@@ -58,7 +58,7 @@ Sz08to17$overnightStart <- ifelse(hour(Sz08to17$datetime)<7,weekdays(Sz08to17$da
 #confirm
 head(Sz08to17[,c("datetime","wkday","overnightStart")],10)
 #define the week of the year
-Sz08to17$weeknum <- isoweek(Sz08to17$datetime)
+Sz08to17$weeknum <- epiweek(Sz08to17$datetime)
 #confirm
 tail(Sz08to17[,c("datetime","weeknum","wkday")],15)
 #convert seizure duration to seconds only
@@ -117,12 +117,12 @@ for(i in 1:length(Sz08to17$datetime)) {
     #this calculates the date of the DST transition for the year
     DSTon <- as.Date(ymd(paste(year(as.POSIXlt(Sz08to17[i,"datetime"])),3,01,sep="-")))
     DSTon <- as.Date(ifelse(wday(DSTon)==1,DSTon+7,DSTon+(15-wday(DSTon))))
-    Sz08to17[i,"DSTweek"] <- as.numeric(week(DSTon))
+    Sz08to17[i,"DSTweek"] <- as.numeric(epiweek(DSTon))
     Sz08to17[i,"DSTday"] <- as.numeric(yday(DSTon))
     #this calculates the date of the ST transition for the year
     DSToff <- as.Date(ymd(paste(year(as.POSIXlt(Sz08to17[i,"datetime"])),11,01,sep="-")))
     DSToff <- as.Date(ifelse(wday(DSToff)==1,DSToff,DSToff+(8-wday(DSToff))))
-    Sz08to17[i,"STweek"] <- as.numeric(week(DSToff))
+    Sz08to17[i,"STweek"] <- as.numeric(epiweek(DSToff))
     Sz08to17[i,"STday"] <- as.numeric(yday(DSToff))
 }
 ###=====This one takes a little while to run=====###
@@ -233,17 +233,17 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
     Sz08to16[which(year(Sz08to16$datetime) == i),"FreqperYEAR"] <- yearnumer
     Sz08to16[which(year(Sz08to16$datetime) == i),"IncidenceperYEAR"] <- yearnumer/yeardenom
     #Establishing aggregating "at risk" counts for each week, with denominator derived from unique IDs up to the end of that week
-    for(j in 1:max(week(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
+    for(j in 1:max(epiweek(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
         #Get the last date in the week j of year i
-        endweek <- max(Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) <= j),"datetime"])
-        #weeklydf <- Sz08to16[which(year(Sz08to16$datetime) <= i & week(Sz08to16$datetime) <= j),"Unlinked_ID"]
+        endweek <- max(Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) <= j),"datetime"])
+        #weeklydf <- Sz08to16[which(year(Sz08to16$datetime) <= i & epiweek(Sz08to16$datetime) <= j),"Unlinked_ID"]
         #Get Unlinked_ID list up to week j of year i
         weeklydf <- Sz08to16[which(Sz08to16$datetime <= endweek),"Unlinked_ID"]
-        weeknumer <- nrow(Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),])
+        weeknumer <- nrow(Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) == j),])
         weekdenom <- length(unique(weeklydf)) + thisyeardenom
-        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"AtRiskperWEEK"] <- weekdenom
-        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"FreqperWEEK"] <- weeknumer
-        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"IncidenceperWEEK"] <- weeknumer/weekdenom
+        Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) == j),"AtRiskperWEEK"] <- weekdenom
+        Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) == j),"FreqperWEEK"] <- weeknumer
+        Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) == j),"IncidenceperWEEK"] <- weeknumer/weekdenom
     }
     #Establishing aggregating "at risk" counts for each day, with denominator derived from unique IDs up to that day
     for(j in 1:max(yday(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
@@ -320,16 +320,16 @@ for(i in scaleIDs) {
 
 for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
     #Calculating "scaled" incidences using sum of individually-scaled seizure counts
-    for(j in 1:max(week(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
+    for(j in 1:max(epiweek(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
         #Get the scaled seizures for week j of year i
-        weeklydf <- Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        weeklydf <- Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
         #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
         #-nrow(weeklydf) gives the total count of seizures in week i (original $IncidenceperWEEK)
         #-sum(weeklydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
         weeknumer <- sum(unique(weeklydf$ScaledSzCount))
         #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
-        weekdenom <- mean(mean(Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
-        Sz08to16[which(year(Sz08to16$datetime) == i & week(Sz08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
+        weekdenom <- mean(mean(Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
+        Sz08to16[which(year(Sz08to16$datetime) == i & epiweek(Sz08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
     }
     #Calculating "scaled" incidences using sum of individually-scaled seizure counts
     for(j in 1:max(yday(Sz08to16[which(year(Sz08to16$datetime) == i),"datetime"]))) {
@@ -400,16 +400,16 @@ for(i in scaleIDs) {
 
 for(i in min(year(Day08to16$datetime)):max(year(Day08to16$datetime))) {
     #Calculating "scaled" incidences using sum of individually-scaled seizure counts
-    for(j in 1:max(week(Day08to16[which(year(Day08to16$datetime) == i),"datetime"]))) {
+    for(j in 1:max(epiweek(Day08to16[which(year(Day08to16$datetime) == i),"datetime"]))) {
         #Get the scaled seizures for week j of year i
-        weeklydf <- Day08to16[which(year(Day08to16$datetime) == i & week(Day08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        weeklydf <- Day08to16[which(year(Day08to16$datetime) == i & epiweek(Day08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
         #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
         #-nrow(weeklydf) gives the total count of seizures in week i (original $IncidenceperWEEK)
         #-sum(weeklydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
         weeknumer <- sum(unique(weeklydf$ScaledSzCount))
         #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
-        weekdenom <- mean(mean(Day08to16[which(year(Day08to16$datetime) == i & week(Day08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
-        Day08to16[which(year(Day08to16$datetime) == i & week(Day08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
+        weekdenom <- mean(mean(Day08to16[which(year(Day08to16$datetime) == i & epiweek(Day08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
+        Day08to16[which(year(Day08to16$datetime) == i & epiweek(Day08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
     }
     #Calculating "scaled" incidences using sum of individually-scaled seizure counts
     for(j in 1:max(yday(Day08to16[which(year(Day08to16$datetime) == i),"datetime"]))) {
@@ -466,16 +466,16 @@ for(i in scaleIDs) {
 
 for(i in min(year(Night08to16$datetime)):max(year(Night08to16$datetime))) {
     #Calculating "scaled" incidences using sum of individually-scaled seizure counts
-    for(j in 1:max(week(Night08to16[which(year(Night08to16$datetime) == i),"datetime"]))) {
+    for(j in 1:max(epiweek(Night08to16[which(year(Night08to16$datetime) == i),"datetime"]))) {
         #Get the scaled seizures for week j of year i
-        weeklydf <- Night08to16[which(year(Night08to16$datetime) == i & week(Night08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
+        weeklydf <- Night08to16[which(year(Night08to16$datetime) == i & epiweek(Night08to16$datetime) == j), c("Unlinked_ID","ScaledSzCount")]
         #Only use a single scaled value to account for all seizures per individual (based on definition unit vector scaling, which seeks to establish distribution of the "1 unit of seizures" an individual has per year). For comparisons of count options:
         #-nrow(weeklydf) gives the total count of seizures in week i (original $IncidenceperWEEK)
         #-sum(weeklydf$ScaledSzCount) gives the sum of all scaled seizures (with redudancy for multiseizers)
         weeknumer <- sum(unique(weeklydf$ScaledSzCount))
         #Calculates the incidence denominator of at-risk persons*time (time window is always the same, so it's not added)
-        weekdenom <- mean(mean(Night08to16[which(year(Night08to16$datetime) == i & week(Night08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
-        Night08to16[which(year(Night08to16$datetime) == i & week(Night08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
+        weekdenom <- mean(mean(Night08to16[which(year(Night08to16$datetime) == i & epiweek(Night08to16$datetime) == j),"AtRiskperWEEK"])) #They're all the same number, so this just gets that number
+        Night08to16[which(year(Night08to16$datetime) == i & epiweek(Night08to16$datetime) == j),"scldIncidenceperWEEK"] <- weeknumer/weekdenom
     }
     #Calculating "scaled" incidences using sum of individually-scaled seizure counts
     for(j in 1:max(yday(Night08to16[which(year(Night08to16$datetime) == i),"datetime"]))) {

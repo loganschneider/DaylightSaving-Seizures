@@ -21,7 +21,9 @@ library(RColorBrewer)
 library(car)
 library(agricolae)
 library(scales)
-library(effsize)
+library(effsize) #for effect size estimates
+library(weights) #for weighted stats
+library(SDMTools) #for weighted stats
 print("Please use the following citation information")
 citation()
 
@@ -41,6 +43,9 @@ print(paste("After cleaning, there remain",
             "individuals and",
             nrow(Sz08to16),
             "seizures."))
+
+#Are the DST onset days correctly identified?
+table(as.Date(Sz08to16[which(Sz08to16$DSTonday == 0),"datetime"])) #Yes
 
 Day08to16 <- read.csv("DAY08to16wInc&RelRates.csv", stringsAsFactors = F)
 Day08to16 <- Day08to16[,-1]
@@ -67,21 +72,34 @@ highlight <- function(x, value1, value2, col.value1, col.value2, col=NA, ...){
 }
 
 ordered <- Sz08to16[with(Sz08to16, order(Unlinked_ID, datetime)), ]
+#weeks are funny at the start and end of the year with partial weeks, so remove them
+orderednotails <- ordered[which(epiweek(ordered$datetime) > 1 & epiweek(ordered$datetime) < 52),"datetime"]
+summary(epiweek(orderednotails))
 
 for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
     DSTon <- as.Date(ymd(paste(i,3,01,sep="-")))
     DSTon <- as.Date(ifelse(wday(DSTon)==1,DSTon+7,DSTon+(15-wday(DSTon))))
     DSToff <- as.Date(ymd(paste(i,11,01,sep="-")))
     DSToff <- as.Date(ifelse(wday(DSToff)==1,DSToff,DSToff+(8-wday(DSToff))))
-    Szwks <- week(ordered[which(year(ordered$datetime)==i),"datetime"])
-    highlight(Szwks,week(DSTon),week(DSToff),"red","blue",breaks=week(as.POSIXct(paste(i,12,31,sep="-"))),main=paste("Histogram of seizure counts for ",i,sep=""))
+    #Szwks <- epiweek(ordered[which(year(ordered$datetime)==i),"datetime"])
+    #highlight(Szwks,epiweek(DSTon),epiweek(DSToff),"red","blue",breaks=week(as.POSIXct(paste(i,12,31,sep="-"))),main=paste("Histogram of seizure counts for ",i,sep=""))
+    Szwks <- epiweek(orderednotails[which(year(orderednotails)==i)])
+    highlight(Szwks,
+              epiweek(DSTon),
+              epiweek(DSToff),
+              "red",
+              "blue",
+              breaks=51,
+              main=paste("Histogram of seizure counts for ",i,sep=""))
 }
 
 #plot aggregate data from complete years: 2008-2016
 #-normalize week of DST transition to 0
-Szwks<-week(Sz08to16[,"datetime"])-Sz08to16[,"DSTweek"]
+#Szwks<-epiweek(Sz08to16[,"datetime"])-Sz08to16[,"DSTweek"]
+Szwks<-epiweek(Sz08to16[which(epiweek(Sz08to16$datetime) > 1 & epiweek(Sz08to16$datetime) < 52),"datetime"])-Sz08to16[which(epiweek(Sz08to16$datetime) > 1 & epiweek(Sz08to16$datetime) < 52),"DSTweek"]
 #-plot with highlights
-highlight(Szwks,0,34,"red","blue",breaks=53,main="Histogram of seizure counts for Jan 2008-Dec 2016")
+#highlight(Szwks,0,34,"red","blue",breaks=53,main="Histogram of seizure counts for Jan 2008-Dec 2016")
+highlight(Szwks,0,34,"red","blue",breaks=51,main="Histogram of seizure counts for Jan 2008-Dec 2016")
 ```
   
 Subsetting datasets for DST and baseline time windows  
@@ -89,6 +107,7 @@ Subsetting datasets for DST and baseline time windows
 #Make relevant dataframes for comparison:
 #-the week of DST (DSTonday 0-6: Sun-Sat)
 Sz08to16wkofDST <- Sz08to16[which(Sz08to16$DSTonday >= 0 & Sz08to16$DSTonday < 7),] #only includes DST-week days
+#Sz08to16wkofDST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$DSTweek),] 
 summary(Sz08to16wkofDST$DSTonday)
 wkofDST <- table(Sz08to16wkofDST$wkday)
 recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
@@ -96,6 +115,7 @@ barplot(wkofDST[recombobulate])
 str(Sz08to16wkofDST$DSTonday)
 #-the week before DST (a control time period)
 Sz08to16wkpreDST <- Sz08to16[which((yday(Sz08to16$datetime) >= Sz08to16$DSTday-7 ) & (yday(Sz08to16$datetime) < Sz08to16$DSTday-0 ) ),] #only includes days in week before DST
+#Sz08to16wkpreDST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$DSTweek-1),] 
 summary(yday(Sz08to16wkpreDST$datetime))
 summary(Sz08to16$DSTday)
 wkpreDST <- table(Sz08to16wkpreDST$wkday)
@@ -104,6 +124,7 @@ barplot(wkpreDST[recombobulate])
 str(yday(Sz08to16wkpreDST$datetime))
 #-the week following DST week (a control time period)
 Sz08to16wkpostDST <- Sz08to16[which(Sz08to16$DSTonday >= 7 & Sz08to16$DSTonday < 14),] #only includes days in week following DST week
+#Sz08to16wkpostDST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$DSTweek+1),] 
 summary(yday(Sz08to16wkpostDST$datetime))
 summary(Sz08to16$DSTday)
 wkpostDST <- table(Sz08to16wkpostDST$wkday)
@@ -112,6 +133,7 @@ barplot(wkpostDST[recombobulate])
 str(yday(Sz08to16wkpostDST$datetime))
 #-the week of ST (STonday 0-6: Sun-Sat) (a control time period, or primary time period)
 Sz08to16wkofST <- Sz08to16[which(Sz08to16$DSToffday >= 0 & Sz08to16$DSToffday < 7),] #only includes ST-week days
+#Sz08to16wkofST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$STweek),] 
 summary(Sz08to16wkofST$DSToffday)
 wkofST <- table(Sz08to16wkofST$wkday)
 recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
@@ -119,6 +141,7 @@ barplot(wkofST[recombobulate])
 str(Sz08to16wkofST$DSToffday)
 #-the week before ST (a control time period)
 Sz08to16wkpreST <- Sz08to16[which(Sz08to16$DSTonday > 231 & Sz08to16$DSTonday <= 238),] #only includes days in week before ST week
+#Sz08to16wkpreST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$STweek-1),] 
 summary(yday(Sz08to16wkpreST$datetime))
 summary(Sz08to16$STday)
 wkpreST <- table(Sz08to16wkpreST$wkday)
@@ -127,6 +150,7 @@ barplot(wkpreST[recombobulate])
 str(yday(Sz08to16wkpreST$datetime))
 #-the week following ST week (a control time period)
 Sz08to16wkpostST <- Sz08to16[which(Sz08to16$DSToffday >= 7 & Sz08to16$DSToffday < 14),] #only includes days in week following ST week
+#Sz08to16wkpostST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$STweek+1),] 
 summary(yday(Sz08to16wkpostST$datetime))
 summary(Sz08to16$STday)
 wkpostST <- table(Sz08to16wkpostST$wkday)
@@ -135,6 +159,7 @@ barplot(wkpostST[recombobulate])
 str(yday(Sz08to16wkpostST$datetime))
 #-NOT week of DST (a control time period)
 Sz08to16notDST <- Sz08to16[which(Sz08to16$DSTonday >= 7 | Sz08to16$DSToffday >=0),] #includes all non-DST-week days and all ST days
+#Sz08to16notDST <- Sz08to16wkofDST <- Sz08to16[which(epiweek(Sz08to16$datetime) != Sz08to16$DSTweek),] 
 summary(yday(Sz08to16notDST$datetime))
 notDST <- table(Sz08to16notDST$wkday)
 recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
@@ -231,7 +256,7 @@ percentalls$Weekday <- factor(percentalls$Weekday, levels=factorlevels) #ensures
 
 #library(ggplot2)
 
-ggplot(dailypercentiles, aes(x=Weekday, y=MeanPercentile)) + 
+print(ggplot(dailypercentiles, aes(x=Weekday, y=MeanPercentile)) + 
     geom_bar(position=position_dodge(), stat="identity",
              colour="black", # Use black outlines,
              size=.3,  # Thinner lines
@@ -243,32 +268,35 @@ ggplot(dailypercentiles, aes(x=Weekday, y=MeanPercentile)) +
                   position=position_dodge(.9)) +
     geom_point(data=percentalls, aes(x=Weekday, y=Percentile, color=factor(Year)), size=3, alpha=0.8) + 
     xlab("Weekday") +
-    ylab("Percentile (± SEM)") +
+    ylab("Percentile (\u00b1SEM)") +
     ggtitle(paste("Percentile of DST seizure counts by weekday over period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
     scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
     theme_bw() + 
-    theme(legend.title = element_blank())
-#png(paste("Percentile of DST seizure counts by weekday over period from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
+    theme(legend.title = element_blank()))
+png(paste("Percentile of DST seizure counts by weekday over period from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
 print(ggplot(dailypercentiles, aes(x=Weekday, y=MeanPercentile)) + 
     geom_bar(position=position_dodge(), stat="identity",
              colour="black", # Use black outlines,
-             size=.3) +      # Thinner lines
+             size=.3,  # Thinner lines
+             alpha=0.8) +  #Semi-transparent
     #stat_compare_means(aes(group = Week), label = "p.signif", label.y = 300)
     geom_errorbar(aes(ymin=MeanPercentile-PercentileSD, ymax=MeanPercentile+PercentileSD),
                   size=.3,    # Thinner lines
                   width=.2,
                   position=position_dodge(.9)) +
+    geom_point(data=percentalls, aes(x=Weekday, y=Percentile, color=factor(Year)), size=3, alpha=0.8) + 
     xlab("Weekday") +
-    ylab("Percentile (± SEM)") +
+    ylab("Percentile (\u00b1SEM)") +
     ggtitle(paste("Percentile of DST seizure counts by weekday over period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
-    scale_y_continuous(breaks=0:100*10) +
-    theme_bw())
-#dev.off()
+    scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 ```
   
 Check seizure weekday percentiles for DST by ANOVA
@@ -299,7 +327,7 @@ totANOVA <- as.data.frame(table(Sz08to16$wkday))
 totANOVA$Var1 <- factor(totANOVA$Var1, levels=factorlevels)
 #Just take a look at total seizure counts over the whole period
 
-ggplot(totANOVA, aes(x=Var1, y=Freq)) + 
+print(ggplot(totANOVA, aes(x=Var1, y=Freq)) + 
     geom_histogram(stat="identity") +
     xlab("Weekday") + 
     ylab("Total seizure counts") + 
@@ -307,21 +335,8 @@ ggplot(totANOVA, aes(x=Var1, y=Freq)) +
     #ylim(round(min(totANOVA$Freq),digits=-3),round(max(totANOVA$Freq),digits=-3)) +
     ggtitle(paste("Total weekday seizure counts over",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) + 
     theme_bw() + 
-    theme(legend.position = "none")
+    theme(legend.position = "none"))
 
-ggplot(totANOVA, aes(x=Var1, y=Freq)) + 
-    geom_point(size=3) +
-    ylab("Total seizure counts") +
-    ggtitle(paste("Total weekday seizure counts over",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) + 
-    theme_bw() + 
-    theme(legend.position = "none",
-          axis.title.x = element_blank())
-#png("Weekday count totals from entire dataset.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot(totANOVA, aes(x=Var1, y=Freq)) + 
     geom_point(size=3) +
     ylab("Total seizure counts") +
@@ -329,7 +344,21 @@ print(ggplot(totANOVA, aes(x=Var1, y=Freq)) +
     theme_bw() + 
     theme(legend.position = "none",
           axis.title.x = element_blank()))
-#dev.off()
+
+png("Weekday count totals from entire dataset.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot(totANOVA, aes(x=Var1, y=Freq)) + 
+    geom_point(size=3) +
+    ylab("Total seizure counts") +
+    ggtitle(paste("Total weekday seizure counts over",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) + 
+    theme_bw() + 
+    theme(legend.position = "none",
+          axis.title.x = element_blank()))
+dev.off()
 ```
 Seems like there might be a protective pattern for the weekends  
   
@@ -351,20 +380,20 @@ barplot(table(tabling),
         args.legend = list(x = "right", bty="n", inset=c(-0.3,0), xpd = TRUE),
         ylab = "Total seizure counts per weekday",
         beside=T)
-#png(paste("Weekday count totals from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-#par(mar = c(5,4,4,8))
-#barplot(table(tabling),
-#        col=brewer.pal(n=7,"Accent"),
-#        legend.text=T,
-#        args.legend = list(x = "right", bty="n", inset=c(-0.2,0), xpd = TRUE),
-#        ylab = "Total seizure counts per weekday",
-#        beside=T)
-#dev.off()
+png(paste("Weekday count totals from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+par(mar = c(5,4,4,8))
+barplot(table(tabling),
+        col=brewer.pal(n=7,"Accent"),
+        legend.text=T,
+        args.legend = list(x = "right", bty="n", inset=c(-0.3,0), xpd = TRUE),
+        ylab = "Total seizure counts per weekday",
+        beside=T)
+dev.off()
 
 #Now doing it by proportion:
 
@@ -376,26 +405,27 @@ barplot(prop.table(table(tabling),margin=2),
         args.legend = list(x = "right", bty="n", inset=c(-0.3,0), xpd = TRUE),
         ylab = "Proportion of yearly seizure counts",
         beside=T)
-#png(paste("Weekday count proportions from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-#par(mar = c(5,4,4,8))
-#barplot(prop.table(table(tabling),margin=2),
-#        col=brewer.pal(n=7,"Accent"),
-#        legend.text=T,
-#        args.legend = list(x = "right", bty="n", inset=c(-0.2,0), xpd = TRUE),
-#        ylab = "Proportion of yearly seizure counts",
-#        beside=T)
-#dev.off()
+png(paste("Weekday count proportions from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+par(mar = c(5,4,4,8))
+barplot(prop.table(table(tabling),margin=2),
+        col=brewer.pal(n=7,"Accent"),
+        legend.text=T,
+        args.legend = list(x = "right", bty="n", inset=c(-0.3,0), xpd = TRUE),
+        ylab = "Proportion of yearly seizure counts",
+        beside=T)
+dev.off()
 
 yearANOVA <- as.data.frame(table(tabling))
 attach(yearANOVA)
-Anova(lm(Freq ~ wkday,
-         data=yearANOVA),
-      type="III")
+wANOVA <- Anova(lm(Freq ~ wkday,
+                data=yearANOVA),
+                type="III")
+print(wANOVA)
 day2countYEAR <- aov(lm(Freq ~ wkday))
 day2countYEAR
 posthoc <- TukeyHSD(x=day2countYEAR, 'wkday', conf.level = 0.95)
@@ -426,26 +456,7 @@ weekdANOVA <- as.data.frame(table(tabling))
 weekdANOVA$Date <- as.POSIXct(weekdANOVA$Date)
 weekdANOVA <- weekdANOVA[which(weekdays(weekdANOVA$Date) == weekdANOVA$wkday),] #due to how table works, need to only keep counts for actual dat-weekday matches
 weekdANOVA$Year <- year(weekdANOVA$Date)
-ggplot() + 
-    geom_boxplot(data=weekdANOVA, aes(x=wkday, y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
-    geom_jitter(data=weekdANOVA, aes(x=wkday,y=Freq,color=factor(Year)), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
-    #geom_point(data=weekdANOVA, aes(x=wkday, y=Freq, color=factor(Year)), alpha=1, size=3) +
-    geom_hline(yintercept = mean(weekdANOVA$Freq,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(weekdANOVA$Freq,na.rm=T)+1.96*sd(weekdANOVA$Freq,na.rm=T),
-                              mean(weekdANOVA$Freq,na.rm=T)-1.96*sd(weekdANOVA$Freq,na.rm=T)),
-               linetype=3) + 
-    ylim((mean(weekdANOVA$Freq,na.rm=T)-2*sd(weekdANOVA$Freq,na.rm=T)),(mean(weekdANOVA$Freq,na.rm=T)+2*sd(weekdANOVA$Freq,na.rm=T))) + 
-    xlab("Weekday") +
-    ylab("Weekly seizure counts") +
-    ggtitle("Weekly seizure counts, aggregated by day of the week") + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-#png(paste("Weekday seizure counts, aggregated by day of the week, from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
+
 print(ggplot() + 
     geom_boxplot(data=weekdANOVA, aes(x=wkday, y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
     geom_jitter(data=weekdANOVA, aes(x=wkday,y=Freq,color=factor(Year)), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
@@ -460,7 +471,28 @@ print(ggplot() +
     ggtitle("Weekly seizure counts, aggregated by day of the week") + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png(paste("Weekday seizure counts, aggregated by day of the week, from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    geom_boxplot(data=weekdANOVA, aes(x=wkday, y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
+    geom_jitter(data=weekdANOVA, aes(x=wkday,y=Freq,color=factor(Year)), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
+    #geom_point(data=weekdANOVA, aes(x=wkday, y=Freq, color=factor(Year)), alpha=1, size=3) +
+    geom_hline(yintercept = mean(weekdANOVA$Freq,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(weekdANOVA$Freq,na.rm=T)+1.96*sd(weekdANOVA$Freq,na.rm=T),
+                              mean(weekdANOVA$Freq,na.rm=T)-1.96*sd(weekdANOVA$Freq,na.rm=T)),
+               linetype=3) + 
+    ylim((mean(weekdANOVA$Freq,na.rm=T)-2*sd(weekdANOVA$Freq,na.rm=T)),(mean(weekdANOVA$Freq,na.rm=T)+2*sd(weekdANOVA$Freq,na.rm=T))) + 
+    xlab("Weekday") +
+    ylab("Weekly seizure counts") +
+    ggtitle("Weekly seizure counts, aggregated by day of the week") + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 attach(weekdANOVA)
 Anova(lm(Freq ~ wkday,
          data=weekdANOVA),
@@ -534,13 +566,13 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
         ylab("Weekly seizure incidence rates (seizures per persons at risk)") +
         ggtitle(paste("Weekly seizure incidence trends, by day of the week for",i)) + 
         theme_bw())
-#    png(paste("Weekday seizure incidence trends for the 2nd through 51st (full) weeks, for the year of ",i,".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-        print(ggplot() + 
+    png(paste("Weekday seizure incidence trends for the 2nd through 51st (full) weeks, for the year of ",i,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    print(ggplot() + 
         geom_boxplot(data=wXyANOVA, aes(x=wkday, y=Incidence), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
         geom_jitter(data=wXyANOVA, aes(x=wkday,y=Incidence), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
         geom_hline(yintercept = mean(wXyANOVA$Incidence,na.rm=T)) + 
@@ -552,7 +584,7 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
         ylab("Weekly seizure incidence rates (seizures per persons at risk)") +
         ggtitle(paste("Weekly seizure incidence trends, by day of the week for",i)) + 
         theme_bw())
-#    dev.off()
+    dev.off()
     attach(wXyANOVA)
     Anova(lm(Incidence ~ wkday,
              data=wXyANOVA),
@@ -564,14 +596,14 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
     hsdday2countWEEK <- HSD.test(day2countWEEK, "wkday")
     print(hsdday2countWEEK)
     plot(hsdday2countWEEK)
-#    png(paste("Honestly significant difference in seizure incidence, by weekday, for ",i,".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-#    plot(hsdday2countWEEK)
-#    dev.off()
+    png(paste("Honestly significant difference in seizure incidence, by weekday, for ",i,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    plot(hsdday2countWEEK)
+    dev.off()
     groups <- merge(groups,hsdday2countWEEK$groups[2],by.x="Weekday",by.y=0,sort=F)
     names(groups)[colid] <- i
     colid <- colid+1
@@ -626,13 +658,13 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
         ylab("Weekly seizure counts") +
         ggtitle(paste("Weekly seizure counts, aggregated by day of the week for",i)) + 
         theme_bw())
-#    png(paste("Weekday seizure counts for the 2nd through 51st (full) weeks, for the year of ",i,".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-        print(ggplot() + 
+    png(paste("Weekday seizure counts for the 2nd through 51st (full) weeks, for the year of ",i,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    print(ggplot() + 
         geom_boxplot(data=wXyANOVA, aes(x=wkday, y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
         geom_jitter(data=wXyANOVA, aes(x=wkday,y=Freq), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
         geom_hline(yintercept = mean(wXyANOVA$Freq,na.rm=T)) + 
@@ -644,7 +676,7 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
         ylab("Weekly seizure counts") +
         ggtitle(paste("Weekly seizure counts, aggregated by day of the week for",i)) + 
         theme_bw())
-#    dev.off()
+    dev.off()
     attach(wXyANOVA)
     PANOVA <- Anova(lm(Freq ~ wkday,
                     data=wXyANOVA),
@@ -657,14 +689,14 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
     hsdday2countWEEK <- HSD.test(day2countWEEK, "wkday")
     print(hsdday2countWEEK)
     plot(hsdday2countWEEK)
-#    png(paste("Honestly significant difference in seizure counts, by weekday, for ",i,".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-#    plot(hsdday2countWEEK)
-#    dev.off()
+    png(paste("Honestly significant difference in seizure counts, by weekday, for ",i,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    plot(hsdday2countWEEK)
+    dev.off()
     groups <- merge(groups,hsdday2countWEEK$groups[2],by.x="Weekday",by.y=0,sort=F)
     names(groups)[colid] <- i
     forPval <- data.frame("comparisons"=rownames(posthoc$wkday),
@@ -705,24 +737,7 @@ tabling$wkday <- factor(tabling$wkday, levels=factorlevels)
 weekdANOVA <- tabling
 weekdANOVA$Date <- as.POSIXct(weekdANOVA$Date)
 weekdANOVA$Year <- year(weekdANOVA$Date)
-ggplot() + 
-    geom_boxplot(data=weekdANOVA, aes(x=wkday, y=scldIncidenceperDAY), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
-    geom_jitter(data=weekdANOVA, aes(x=wkday,y=scldIncidenceperDAY,color=factor(Year)), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
-    #geom_point(data=weekdANOVA, aes(x=wkday, y=scldIncidenceperDAY, color=factor(Year)), alpha=1, size=3) +
-    #geom_hline(yintercept = mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)) + 
-    #geom_hline(yintercept = c(mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)+1.96*sd(weekdANOVA$scldIncidenceperDAY,na.rm=T),mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)-1.96*sd(weekdANOVA$scldIncidenceperDAY,na.rm=T)),linetype=3) + 
-    ylim(0,(mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)+2*sd(weekdANOVA$scldIncidenceperDAY,na.rm=T))) + 
-    xlab("Weekday") +
-    ylab("Weekly seizure incidence rates") +
-    ggtitle("Weekly seizure incidence rates (scaled per individual), aggregated by day of the week") + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-#png(paste("Weekday seizure incidence rates, aggregated by day of the week, from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
+
 print(ggplot() + 
     geom_boxplot(data=weekdANOVA, aes(x=wkday, y=scldIncidenceperDAY), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
     geom_jitter(data=weekdANOVA, aes(x=wkday,y=scldIncidenceperDAY,color=factor(Year)), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
@@ -735,7 +750,26 @@ print(ggplot() +
     ggtitle("Weekly seizure incidence rates (scaled per individual), aggregated by day of the week") + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png(paste("Weekday seizure incidence rates, aggregated by day of the week, from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    geom_boxplot(data=weekdANOVA, aes(x=wkday, y=scldIncidenceperDAY), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
+    geom_jitter(data=weekdANOVA, aes(x=wkday,y=scldIncidenceperDAY,color=factor(Year)), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
+    #geom_point(data=weekdANOVA, aes(x=wkday, y=scldIncidenceperDAY, color=factor(Year)), alpha=1, size=3) +
+    #geom_hline(yintercept = mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)) + 
+    #geom_hline(yintercept = c(mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)+1.96*sd(weekdANOVA$scldIncidenceperDAY,na.rm=T),mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)-1.96*sd(weekdANOVA$scldIncidenceperDAY,na.rm=T)),linetype=3) + 
+    ylim(0,(mean(weekdANOVA$scldIncidenceperDAY,na.rm=T)+2*sd(weekdANOVA$scldIncidenceperDAY,na.rm=T))) + 
+    xlab("Weekday") +
+    ylab("Weekly seizure incidence rates") +
+    ggtitle("Weekly seizure incidence rates (scaled per individual), aggregated by day of the week") + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 attach(weekdANOVA)
 Anova(lm(scldIncidenceperDAY ~ wkday,
          data=weekdANOVA),
@@ -765,13 +799,14 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
         ylab("Weekly seizure incidence rates") +
         ggtitle(paste("Weekly seizure incidence rates, aggregated by day of the week for",i)) + 
         theme_bw())
-#    png(paste("Weekday seizure incidence rates for the 2nd through 51st (full) weeks, for the year of ",i,".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-        print(ggplot() + 
+    
+    png(paste("Weekday seizure incidence rates for the 2nd through 51st (full) weeks, for the year of ",i,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    print(ggplot() + 
         geom_boxplot(data=wXyANOVA, aes(x=wkday, y=scldIncidenceperDAY), fill="#4271AE", alpha=0.5, outlier.size=-1,na.rm=T) + #Avoid duplicate outlier plotting
         geom_jitter(data=wXyANOVA, aes(x=wkday,y=scldIncidenceperDAY), position=position_jitter(width=0.05), alpha=0.8,na.rm=T) + #Outliers from incomplete weeks
         geom_hline(yintercept = mean(wXyANOVA$scldIncidenceperDAY,na.rm=T)) + 
@@ -783,7 +818,7 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
         ylab("Weekly seizure incidence rates") +
         ggtitle(paste("Weekly seizure incidence rates, aggregated by day of the week for",i)) + 
         theme_bw())
-#    dev.off()
+    dev.off()
     attach(wXyANOVA)
     PANOVA <- Anova(lm(scldIncidenceperDAY ~ wkday,
                     data=wXyANOVA),
@@ -796,14 +831,14 @@ for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
     hsdday2countWEEK <- HSD.test(day2countWEEK, "wkday")
     print(hsdday2countWEEK)
     plot(hsdday2countWEEK)
-#    png(paste("Honestly significant difference in seizure incidence rates, by weekday, for ",i,".png",sep=""), 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-#    plot(hsdday2countWEEK)
-#    dev.off()
+    png(paste("Honestly significant difference in seizure incidence rates, by weekday, for ",i,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    plot(hsdday2countWEEK)
+    dev.off()
     groups <- merge(groups,hsdday2countWEEK$groups[2],by.x="Weekday",by.y=0,sort=F)
     names(groups)[colid] <- i
     forPval <- data.frame("comparisons"=rownames(posthoc$wkday),
@@ -874,28 +909,6 @@ for(i in min(daytrend$RelativeDay):max(daytrend$RelativeDay)) {
     index=index+1
 }
 
-ggplot() + 
-    #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-    #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-    geom_line() + 
-    stat_summary(data=daytrend, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
-    geom_hline(yintercept = mean(daytrend$RateRatio,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(daytrend$RateRatio,na.rm=T)+1.96*sd(daytrend$RateRatio,na.rm=T),
-                              mean(daytrend$RateRatio,na.rm=T)-1.96*sd(daytrend$RateRatio,na.rm=T)),
-               linetype=3) + 
-    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
-    ylab("Rate Ratio (Sz incidence compared to DST)") +
-    ggtitle("Daily Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Daily rate ratios (relative to DST).png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
     #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -911,41 +924,30 @@ print(ggplot() +
     #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=unique(daytrend),
-    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-    #           alpha=0.25) + 
-    geom_hline(yintercept = 1, linetype = 3) + 
-    geom_smooth(data=unique(daytrend),
-                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-                method="loess",
-                span=0.1,
-                se=FALSE) + 
-    geom_smooth(data=unique(daytrend),
-                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-                method="loess",
-                span=7/365,
-                se=TRUE,
-                alpha=0.5,
-                colour="black") + 
-    geom_vline(xintercept=c(0,7,237,244)) + 
-    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SEM)") +
+png("Daily rate ratios (relative to DST).png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+    #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+    geom_line() + 
+    stat_summary(data=daytrend, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
+    geom_hline(yintercept = mean(daytrend$RateRatio,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(daytrend$RateRatio,na.rm=T)+1.96*sd(daytrend$RateRatio,na.rm=T),
+                              mean(daytrend$RateRatio,na.rm=T)-1.96*sd(daytrend$RateRatio,na.rm=T)),
+               linetype=3) + 
+    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
+    ylab("Rate Ratio (Sz incidence compared to DST)") +
     ggtitle("Daily Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2.25) + 
+    #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Daily rate ratios with loess averaging of trends.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=unique(daytrend),
     #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
@@ -967,34 +969,46 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Daily Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2.25) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
+png("Daily rate ratios with loess averaging of trends.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=unique(daytrend),
+    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+    #           alpha=0.25) + 
     geom_hline(yintercept = 1, linetype = 3) + 
-    geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="black") + 
-    geom_ribbon(data=daystats,aes(x=RelativeDay,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_smooth(data=unique(daytrend),
+                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+                method="loess",
+                span=0.1,
+                se=FALSE) + 
+    geom_smooth(data=unique(daytrend),
+                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+                method="loess",
+                span=7/365,
+                se=TRUE,
+                alpha=0.5,
+                colour="black") + 
     geom_vline(xintercept=c(0,7,237,244)) + 
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Daily Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2) + 
+    #ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Daily rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
@@ -1004,15 +1018,36 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Daily Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png("Daily rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
+    geom_hline(yintercept = 1, linetype = 3) + 
+    geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="black") + 
+    geom_ribbon(data=daystats,aes(x=RelativeDay,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_vline(xintercept=c(0,7,237,244)) + 
+    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Day of the year (indexed to DST transition)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
+    ggtitle("Daily Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0.5,2) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 
 weektrend <- data.frame("Year"=year(trending$datetime),
-                        "RelativeWeek"=(week(trending$datetime) - trending$DSTweek),
+                        "RelativeWeek"=(epiweek(trending$datetime) - trending$DSTweek),
                         "WeeklyIncidence"=trending$IncidenceperWEEK,
                         "AtRisk"=trending$AtRiskperWEEK)
 #Calculate approximate "rate ratio" relative to DST
@@ -1050,28 +1085,6 @@ for(i in min(weektrend$RelativeWeek):max(weektrend$RelativeWeek)) {
     index=index+1
 }
 
-ggplot() + 
-    #geom_boxplot(data=weektrend, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-    #geom_point(data=weektrend, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-    geom_line() + 
-    stat_summary(data=weektrend, aes(x=RelativeWeek, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
-    geom_hline(yintercept = mean(weektrend$RateRatio,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(weektrend$RateRatio,na.rm=T)+1.96*sd(weektrend$RateRatio,na.rm=T),
-                              mean(weektrend$RateRatio,na.rm=T)-1.96*sd(weektrend$RateRatio,na.rm=T)),
-               linetype=3) + 
-    xlab("Week of year (relative to DST transition on Sunday - indexed as 0)") +
-    ylab("Rate Ratio (Sz incidence compared to DST)") +
-    ggtitle("Weekly Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Weekly rate ratios (relative to DST).png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_boxplot(data=weektrend, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
     #geom_point(data=weektrend, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -1087,34 +1100,30 @@ print(ggplot() +
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot(data=weektrend,
-       aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
-    #geom_point(alpha=0.3) + 
-    geom_hline(yintercept = 1, linetype = 3) + 
-    geom_smooth(se=FALSE, method="loess", span=0.3) + 
-    geom_smooth(method="loess",
-                span=0.1,
-                se=TRUE,
-                alpha=0.75,
-                colour="black") + 
-    geom_vline(xintercept=c(0,1,33,34)) + 
-    annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SD)") +
+png("Weekly rate ratios (relative to DST).png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_boxplot(data=weektrend, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+    #geom_point(data=weektrend, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+    geom_line() + 
+    stat_summary(data=weektrend, aes(x=RelativeWeek, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
+    geom_hline(yintercept = mean(weektrend$RateRatio,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(weektrend$RateRatio,na.rm=T)+1.96*sd(weektrend$RateRatio,na.rm=T),
+                              mean(weektrend$RateRatio,na.rm=T)-1.96*sd(weektrend$RateRatio,na.rm=T)),
+               linetype=3) + 
+    xlab("Week of year (relative to DST transition on Sunday - indexed as 0)") +
+    ylab("Rate Ratio (Sz incidence compared to DST)") +
     ggtitle("Weekly Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Weekly rate ratios with loess averaging and yearly trends.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot(data=weektrend,
        aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
     #geom_point(alpha=0.3) + 
@@ -1129,34 +1138,39 @@ print(ggplot(data=weektrend,
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Weekly Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=weektrend, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
+png("Weekly rate ratios with loess averaging and yearly trends.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot(data=weektrend,
+       aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
+    #geom_point(alpha=0.3) + 
     geom_hline(yintercept = 1, linetype = 3) + 
-    geom_line(data=weekstats, aes(x=RelativeWeek,y=Mean),size=1,color="black") + 
-    geom_ribbon(data=weekstats,aes(x=RelativeWeek,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_smooth(se=FALSE, method="loess", span=0.3) + 
+    geom_smooth(method="loess",
+                span=0.1,
+                se=TRUE,
+                alpha=0.75,
+                colour="black") + 
     geom_vline(xintercept=c(0,1,33,34)) + 
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Weekly Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2) + 
+    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Weekly rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=weektrend, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
@@ -1166,12 +1180,33 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Weekly Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png("Weekly rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=weektrend, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
+    geom_hline(yintercept = 1, linetype = 3) + 
+    geom_line(data=weekstats, aes(x=RelativeWeek,y=Mean),size=1,color="black") + 
+    geom_ribbon(data=weekstats,aes(x=RelativeWeek,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_vline(xintercept=c(0,1,33,34)) + 
+    annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Week of the year (indexed to DST transition)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SD)") +
+    ggtitle("Weekly Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0.5,2) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 ```
   
 Individual-seizure-propensity-adusted seizure incidence rate ratios (approximated, as different denominators of person-time)  
@@ -1231,28 +1266,6 @@ for(i in min(forstats$RelativeDay):max(forstats$RelativeDay)) {
     index=index+1
 }
 
-ggplot() + 
-    #geom_boxplot(data=dayagg, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-    #geom_point(data=dayagg, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-    geom_line() + 
-    stat_summary(data=dayagg, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
-    geom_hline(yintercept = mean(dayagg$RateRatio,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(dayagg$RateRatio,na.rm=T)+1.96*sd(dayagg$RateRatio,na.rm=T),
-                              mean(dayagg$RateRatio,na.rm=T)-1.96*sd(dayagg$RateRatio,na.rm=T)),
-               linetype=3) + 
-    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
-    ylab("Individual-adjusted Rate Ratio (Sz incidence vs DST)") +
-    ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
-    #ylim(0,quantile(dayagg$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-adjusted daily rate ratios (relative to DST).png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_boxplot(data=dayagg, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
     #geom_point(data=dayagg, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -1268,9 +1281,31 @@ print(ggplot() +
     #ylim(0,quantile(dayagg$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
+png("Individual-adjusted daily rate ratios (relative to DST).png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_boxplot(data=dayagg, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+    #geom_point(data=dayagg, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+    geom_line() + 
+    stat_summary(data=dayagg, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
+    geom_hline(yintercept = mean(dayagg$RateRatio,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(dayagg$RateRatio,na.rm=T)+1.96*sd(dayagg$RateRatio,na.rm=T),
+                              mean(dayagg$RateRatio,na.rm=T)-1.96*sd(dayagg$RateRatio,na.rm=T)),
+               linetype=3) + 
+    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
+    ylab("Individual-adjusted Rate Ratio (Sz incidence vs DST)") +
+    ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
+    #ylim(0,quantile(dayagg$RateRatio, 0.99, na.rm=T)[[1]]) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
+
+print(ggplot() + 
     geom_point(data=unique(dayagg),
                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
                alpha=0.25) + 
@@ -1286,40 +1321,12 @@ ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
     #ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
 
-ggplot(data=unique(dayagg), aes(x=RelativeDay,y=RateRatio,color=factor(Year))) + 
-    #geom_point(data=unique(dayagg),
-    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-    #           alpha=0.25) + 
-    #geom_smooth(method="loess", span=1/52, se=TRUE, alpha=0.3, colour="red") + 
-    geom_hline(yintercept = 1, linetype = 3) + 
-    geom_smooth(se=FALSE, method="loess", span=0.1, alpha=0.5) + 
-    geom_smooth(method="loess",
-                span=0.01,
-                se=TRUE,
-                alpha=0.75,
-                colour="black") + 
-    geom_vline(xintercept=c(0,7,237,244)) + 
-    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Day of the year (indexed to DST transition)") +
-    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean ± SEM)") +
-    ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
-    #ylim(0.5,2.25) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-adjusted daily rate ratios with loess averaging of trends.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot(data=unique(dayagg), aes(x=RelativeDay,y=RateRatio,color=factor(Year))) + 
     #geom_point(data=unique(dayagg),
     #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
@@ -1336,34 +1343,41 @@ print(ggplot(data=unique(dayagg), aes(x=RelativeDay,y=RateRatio,color=factor(Yea
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
     #ylim(0.5,2.25) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=dayagg, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
+png("Individual-adjusted daily rate ratios with loess averaging of trends.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot(data=unique(dayagg), aes(x=RelativeDay,y=RateRatio,color=factor(Year))) + 
+    #geom_point(data=unique(dayagg),
+    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+    #           alpha=0.25) + 
+    #geom_smooth(method="loess", span=1/52, se=TRUE, alpha=0.3, colour="red") + 
     geom_hline(yintercept = 1, linetype = 3) + 
-    geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="black") + 
-    geom_ribbon(data=daystats,aes(x=RelativeDay,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_smooth(se=FALSE, method="loess", span=0.1, alpha=0.5) + 
+    geom_smooth(method="loess",
+                span=0.01,
+                se=TRUE,
+                alpha=0.75,
+                colour="black") + 
     geom_vline(xintercept=c(0,7,237,244)) + 
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
-    #ylim(0.5,2) + 
+    #ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Individual-adjusted daily rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=dayagg, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
@@ -1373,15 +1387,36 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
     #ylim(0.5,2) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png("Individual-adjusted daily rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=dayagg, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
+    geom_hline(yintercept = 1, linetype = 3) + 
+    geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="black") + 
+    geom_ribbon(data=daystats,aes(x=RelativeDay,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_vline(xintercept=c(0,7,237,244)) + 
+    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Day of the year (indexed to DST transition)") +
+    ylab("Individual-adjusted daily Rate Ratio trends over a year (mean \u00b1SD)") +
+    ggtitle("Individual-adjusted daily Rate Ratio trends over a year") + 
+    #ylim(0.5,2) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 
 weektrend <- data.frame("Year"=year(reltrend$datetime),
-                        "RelativeWeek"=(week(reltrend$datetime) - reltrend$DSTweek),
+                        "RelativeWeek"=(epiweek(reltrend$datetime) - reltrend$DSTweek),
                         "WeeklyIncidence"=reltrend$relIncidenceperWEEK,
                         "AtRisk"=reltrend$AtRiskperWEEK)
 weekagg <- data.frame("Year"=numeric(),
@@ -1438,28 +1473,6 @@ for(i in min(forstats$RelativeWeek):max(forstats$RelativeWeek)) {
 weektrend <- unique(weektrend)
 weekagg <- unique(weekagg)
 
-ggplot() + 
-    #geom_boxplot(data=weekagg, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-    #geom_point(data=weekagg, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-    geom_line() + 
-    stat_summary(data=weekagg, aes(x=RelativeWeek, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
-    geom_hline(yintercept = mean(weekagg$RateRatio,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(weekagg$RateRatio,na.rm=T)+1.96*sd(weekagg$RateRatio,na.rm=T),
-                              mean(weekagg$RateRatio,na.rm=T)-1.96*sd(weekagg$RateRatio,na.rm=T)),
-               linetype=3) + 
-    xlab("Week of year (relative to DST transition week, indexed as 0)") +
-    ylab("Rate Ratio (Sz incidence compared to DST)") +
-    ggtitle("Individual-adjusted weekly Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-adjusted weekly rate ratios (relative to DST).png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_boxplot(data=weekagg, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
     #geom_point(data=weekagg, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -1475,9 +1488,31 @@ print(ggplot() +
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
+png("Individual-adjusted weekly rate ratios (relative to DST).png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_boxplot(data=weekagg, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+    #geom_point(data=weekagg, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+    geom_line() + 
+    stat_summary(data=weekagg, aes(x=RelativeWeek, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
+    geom_hline(yintercept = mean(weekagg$RateRatio,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(weekagg$RateRatio,na.rm=T)+1.96*sd(weekagg$RateRatio,na.rm=T),
+                              mean(weekagg$RateRatio,na.rm=T)-1.96*sd(weekagg$RateRatio,na.rm=T)),
+               linetype=3) + 
+    xlab("Week of year (relative to DST transition week, indexed as 0)") +
+    ylab("Rate Ratio (Sz incidence compared to DST)") +
+    ggtitle("Individual-adjusted weekly Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
+
+print(ggplot() + 
     geom_hline(yintercept = 1, linetype = 3) + 
     geom_point(data=weekagg,
                aes(x=RelativeWeek,y=RateRatio,color=factor(Year)), 
@@ -1494,38 +1529,12 @@ ggplot() +
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-adjusted weekly Rate Ratio trends over a year") + 
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
 
-ggplot(data=weekagg,
-       aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
-    geom_hline(yintercept = 1, linetype = 3) + 
-    #geom_point(alpha=0.3) + 
-    geom_smooth(se=FALSE, method="loess", span=0.2) + 
-    geom_smooth(method="loess",
-                span=0.1,
-                se=TRUE,
-                alpha=0.75,
-                colour="black") + 
-    geom_vline(xintercept=c(0,1,33,34)) + 
-    annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
-    ggtitle("Individual-adjusted weekly Rate Ratio trends over a year") + 
-    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-adjusted weekly rate ratios with loess averaging and yearly trends.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot(data=weekagg,
        aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
     geom_hline(yintercept = 1, linetype = 3) + 
@@ -1540,34 +1549,39 @@ print(ggplot(data=weekagg,
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-adjusted weekly Rate Ratio trends over a year") + 
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=weekagg, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
+png("Individual-adjusted weekly rate ratios with loess averaging and yearly trends.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot(data=weekagg,
+       aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
     geom_hline(yintercept = 1, linetype = 3) + 
-    geom_line(data=weekstats, aes(x=RelativeWeek,y=Mean),size=1,color="black") + 
-    geom_ribbon(data=weekstats,aes(x=RelativeWeek,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    #geom_point(alpha=0.3) + 
+    geom_smooth(se=FALSE, method="loess", span=0.2) + 
+    geom_smooth(method="loess",
+                span=0.1,
+                se=TRUE,
+                alpha=0.75,
+                colour="black") + 
     geom_vline(xintercept=c(0,1,33,34)) + 
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
-    ggtitle("Individual-adjusted weekly Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2) + 
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
+    ggtitle("Individual-adjusted weekly Rate Ratio trends over a year") + 
+    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Individual-adjusted weekly rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=weekagg, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
@@ -1577,12 +1591,33 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-adjusted weekly Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png("Individual-adjusted weekly rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=weekagg, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
+    geom_hline(yintercept = 1, linetype = 3) + 
+    geom_line(data=weekstats, aes(x=RelativeWeek,y=Mean),size=1,color="black") + 
+    geom_ribbon(data=weekstats,aes(x=RelativeWeek,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_vline(xintercept=c(0,1,33,34)) + 
+    annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Week of the year (indexed to DST transition)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
+    ggtitle("Individual-adjusted weekly Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0.5,2) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 ```
   
 Individual-yearly-seizure-propensity-scaled seizure incidence rate ratios (approximated, as different denominators of person-time)  
@@ -1629,28 +1664,6 @@ for(i in min(daytrend$RelativeDay):max(daytrend$RelativeDay)) {
     index=index+1
 }
 
-ggplot() + 
-    #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-    #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-    geom_line() + 
-    stat_summary(data=daytrend, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
-    geom_hline(yintercept = mean(daytrend$RateRatio,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(daytrend$RateRatio,na.rm=T)+1.96*sd(daytrend$RateRatio,na.rm=T),
-                              mean(daytrend$RateRatio,na.rm=T)-1.96*sd(daytrend$RateRatio,na.rm=T)),
-               linetype=3) + 
-    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
-    ylab("Rate Ratio (Sz incidence compared to DST)") +
-    ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-scaled daily rate ratios (relative to DST).png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
     #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -1666,41 +1679,30 @@ print(ggplot() +
     #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=daytrend,
-    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-    #           alpha=0.25) + 
-    geom_hline(yintercept = 1, linetype = 3) + 
-    geom_smooth(data=daytrend,
-                aes(x=RelativeDay,y=RateRatio,color=factor(Year)),
-                method="loess",
-                span=0.1,
-                se=FALSE) + 
-    geom_smooth(data=daytrend,
-                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-                method="loess",
-                span=7/365,
-                se=TRUE,
-                alpha=0.75,
-                colour="black") + 
-    geom_vline(xintercept=c(0,7,237,244)) + 
-    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SEM)") +
+png("Individual-scaled daily rate ratios (relative to DST).png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+    #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+    geom_line() + 
+    stat_summary(data=daytrend, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
+    geom_hline(yintercept = mean(daytrend$RateRatio,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(daytrend$RateRatio,na.rm=T)+1.96*sd(daytrend$RateRatio,na.rm=T),
+                              mean(daytrend$RateRatio,na.rm=T)-1.96*sd(daytrend$RateRatio,na.rm=T)),
+               linetype=3) + 
+    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
+    ylab("Rate Ratio (Sz incidence compared to DST)") +
     ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2.25) + 
+    #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Individual-scaled daily rate ratios with loess averaging of trends.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=daytrend,
     #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
@@ -1722,35 +1724,46 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
-)
-#dev.off()
+    theme(legend.title = element_blank()))
 
-ggplot() + 
-    #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
+png("Individual-scaled daily rate ratios with loess averaging of trends.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=daytrend,
+    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+    #           alpha=0.25) + 
     geom_hline(yintercept = 1, linetype = 3) + 
-    geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="black") + 
-    geom_ribbon(data=daystats,aes(x=RelativeDay,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_smooth(data=daytrend,
+                aes(x=RelativeDay,y=RateRatio,color=factor(Year)),
+                method="loess",
+                span=0.1,
+                se=FALSE) + 
+    geom_smooth(data=daytrend,
+                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+                method="loess",
+                span=7/365,
+                se=TRUE,
+                alpha=0.75,
+                colour="black") + 
     geom_vline(xintercept=c(0,7,237,244)) + 
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2) + 
+    #ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Individual-scaled daily rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
@@ -1760,15 +1773,36 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png("Individual-scaled daily rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
+    geom_hline(yintercept = 1, linetype = 3) + 
+    geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="black") + 
+    geom_ribbon(data=daystats,aes(x=RelativeDay,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_vline(xintercept=c(0,7,237,244)) + 
+    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Day of the year (indexed to DST transition)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
+    ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0.5,2) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 
 weektrend <- data.frame("Year"=year(scldtrend$datetime),
-                        "RelativeWeek"=(week(scldtrend$datetime) - scldtrend$DSTweek),
+                        "RelativeWeek"=(epiweek(scldtrend$datetime) - scldtrend$DSTweek),
                         "WeeklyIncidence"=scldtrend$scldIncidenceperWEEK,
                         "AtRisk"=reltrend$AtRiskperWEEK)
 #Calculate approximate "rate ratio" relative to DST
@@ -1806,28 +1840,6 @@ for(i in min(weektrend$RelativeWeek):max(weektrend$RelativeWeek)) {
     index=index+1
 }
 
-ggplot() + 
-    #geom_boxplot(data=weektrend, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-    #geom_point(data=weektrend, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-    geom_line() + 
-    stat_summary(data=weektrend, aes(x=RelativeWeek, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
-    geom_hline(yintercept = mean(weektrend$RateRatio,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(weektrend$RateRatio,na.rm=T)+1.96*sd(weektrend$RateRatio,na.rm=T),
-                              mean(weektrend$RateRatio,na.rm=T)-1.96*sd(weektrend$RateRatio,na.rm=T)),
-               linetype=3) + 
-    xlab("Week of year (relative to DST transition on Sunday - indexed as 0)") +
-    ylab("Rate Ratio (Sz incidence compared to DST)") +
-    ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-scaled weekly rate ratios (relative to DST).png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_boxplot(data=weektrend, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
     #geom_point(data=weektrend, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -1843,9 +1855,31 @@ print(ggplot() +
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
+png("Individual-scaled weekly rate ratios (relative to DST).png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_boxplot(data=weektrend, aes(x=RelativeWeek, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+    #geom_point(data=weektrend, aes(x=RelativeWeek, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+    geom_line() + 
+    stat_summary(data=weektrend, aes(x=RelativeWeek, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
+    geom_hline(yintercept = mean(weektrend$RateRatio,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(weektrend$RateRatio,na.rm=T)+1.96*sd(weektrend$RateRatio,na.rm=T),
+                              mean(weektrend$RateRatio,na.rm=T)-1.96*sd(weektrend$RateRatio,na.rm=T)),
+               linetype=3) + 
+    xlab("Week of year (relative to DST transition on Sunday - indexed as 0)") +
+    ylab("Rate Ratio (Sz incidence compared to DST)") +
+    ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
+
+print(ggplot() + 
     geom_point(data=weektrend,
                aes(x=RelativeWeek,y=RateRatio,color=factor(Year)), 
                alpha=0.5) + 
@@ -1861,37 +1895,12 @@ ggplot() +
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
 
-ggplot(data=weektrend,
-       aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
-    #geom_point(alpha=0.3) + 
-    geom_smooth(se=FALSE, method="loess", span=0.3) + 
-    geom_smooth(method="loess",
-                span=0.1,
-                se=TRUE,
-                alpha=0.75,
-                colour="black") + 
-    geom_vline(xintercept=c(0,1,33,34)) + 
-    annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
-    ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-scaled weekly rate ratios with loess averaging and yearly trends.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot(data=weektrend,
        aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
     #geom_point(alpha=0.3) + 
@@ -1905,34 +1914,38 @@ print(ggplot(data=weektrend,
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=weektrend, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
-    geom_hline(yintercept = 1, linetype = 3) + 
-    geom_line(data=weekstats, aes(x=RelativeWeek,y=Mean),size=1,color="black") + 
-    geom_ribbon(data=weekstats,aes(x=RelativeWeek,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+png("Individual-scaled weekly rate ratios with loess averaging and yearly trends.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot(data=weektrend,
+       aes(x=RelativeWeek,y=RateRatio,color=factor(Year))) + 
+    #geom_point(alpha=0.3) + 
+    geom_smooth(se=FALSE, method="loess", span=0.3) + 
+    geom_smooth(method="loess",
+                span=0.1,
+                se=TRUE,
+                alpha=0.75,
+                colour="black") + 
     geom_vline(xintercept=c(0,1,33,34)) + 
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2) + 
+    #ylim(0,quantile(weektrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Individual-scaled weekly rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=weektrend, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
@@ -1942,12 +1955,33 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Week of the year (indexed to DST transition)") +
-    ylab("Weekly Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
+
+png("Individual-scaled weekly rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=weektrend, aes(x=RelativeWeek,y=RateRatio,color=Year), alpha=0.01) + 
+    geom_hline(yintercept = 1, linetype = 3) + 
+    geom_line(data=weekstats, aes(x=RelativeWeek,y=Mean),size=1,color="black") + 
+    geom_ribbon(data=weekstats,aes(x=RelativeWeek,ymin=(Mean+SD),ymax=(Mean-SD)),alpha=0.5) + 
+    geom_vline(xintercept=c(0,1,33,34)) + 
+    annotate("rect", xmin=0, xmax=1, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=33, xmax=34, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Week of the year (indexed to DST transition)") +
+    ylab("Weekly Rate Ratio trends over a year (mean \u00b1SD)") +
+    ggtitle("Individual-scaled weekly Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0.5,2) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
 ```
   
 Diurnal vs nocturnal individual-yearly-seizure-propensity-scaled seizure incidence rate ratios (approximated, as different denominators of person-time)  
@@ -2022,28 +2056,6 @@ for(i in min(nighttrend$RelativeDay):max(nighttrend$RelativeDay)) {
     index=index+1
 }
 
-ggplot() + 
-    #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-    #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-    geom_line() + 
-    stat_summary(data=daytrend, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
-    geom_hline(yintercept = mean(daytrend$RateRatio,na.rm=T)) + 
-    geom_hline(yintercept = c(mean(daytrend$RateRatio,na.rm=T)+1.96*sd(daytrend$RateRatio,na.rm=T),
-                              mean(daytrend$RateRatio,na.rm=T)-1.96*sd(daytrend$RateRatio,na.rm=T)),
-               linetype=3) + 
-    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
-    ylab("Rate Ratio (Sz incidence compared to DST)") +
-    ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
-    theme_bw() + 
-    theme(legend.title = element_blank())
-
-#png("Individual-scaled daily rate ratios (relative to DST).png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
     #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -2059,55 +2071,30 @@ print(ggplot() +
     #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
-    #geom_point(data=daytrend,
-    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-    #           alpha=0.25) + 
-    geom_hline(yintercept = 1, linetype = 3) + 
-    #geom_smooth(data=daytrend,
-    #            aes(x=RelativeDay,y=RateRatio,color=factor(Year)),
-    #            method="loess",
-    #            span=0.1,
-    #            se=FALSE) + 
-    geom_smooth(data=daytrend,
-                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-                method="loess",
-                span=7/365,
-                se=TRUE,
-                alpha=0.5,
-                colour="orange4",
-                fill="orange1") + 
-    #geom_smooth(data=nighttrend,
-    #            aes(x=RelativeDay,y=RateRatio,color=factor(Year)),
-    #            method="loess",
-    #            span=0.1,
-    #            se=FALSE) + 
-    geom_smooth(data=nighttrend,
-                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
-                method="loess",
-                span=7/365,
-                se=TRUE,
-                alpha=0.5,
-                colour="blue4",
-                fill="blue1") + 
-    geom_vline(xintercept=c(0,7,237,244)) + 
-    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SEM)") +
-    ggtitle("Individual-scaled day and night Rate Ratio trends over a year, indexed to DST") + 
-    #ylim(0.5,2.25) + 
+png("Individual-scaled daily rate ratios (relative to DST).png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_boxplot(data=daytrend, aes(x=RelativeDay, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+    #geom_point(data=daytrend, aes(x=RelativeDay, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+    geom_line() + 
+    stat_summary(data=daytrend, aes(x=RelativeDay, y=RateRatio, group=Year, color=factor(Year)), geom="line", fun.y=mean) + 
+    geom_hline(yintercept = mean(daytrend$RateRatio,na.rm=T)) + 
+    geom_hline(yintercept = c(mean(daytrend$RateRatio,na.rm=T)+1.96*sd(daytrend$RateRatio,na.rm=T),
+                              mean(daytrend$RateRatio,na.rm=T)-1.96*sd(daytrend$RateRatio,na.rm=T)),
+               linetype=3) + 
+    xlab("Day of year (relative to DST transition on Sunday - indexed as 0)") +
+    ylab("Rate Ratio (Sz incidence compared to DST)") +
+    ggtitle("Individual-scaled daily Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0,quantile(daytrend$RateRatio, 0.99, na.rm=T)[[1]]) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
+dev.off()
 
-#png("Individual-scaled day and night rate ratios with loess averaging of trends.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
 print(ggplot() + 
     #geom_point(data=daytrend,
     #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
@@ -2143,14 +2130,61 @@ print(ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SEM)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SEM)") +
     ggtitle("Individual-scaled day and night Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2.25) + 
     theme_bw() + 
     theme(legend.title = element_blank()))
-#dev.off()
 
-ggplot() + 
+png("Individual-scaled day and night rate ratios with loess averaging of trends.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
+    #geom_point(data=daytrend,
+    #           aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+    #           alpha=0.25) + 
+    geom_hline(yintercept = 1, linetype = 3) + 
+    #geom_smooth(data=daytrend,
+    #            aes(x=RelativeDay,y=RateRatio,color=factor(Year)),
+    #            method="loess",
+    #            span=0.1,
+    #            se=FALSE) + 
+    geom_smooth(data=daytrend,
+                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+                method="loess",
+                span=7/365,
+                se=TRUE,
+                alpha=0.5,
+                colour="orange4",
+                fill="orange1") + 
+    #geom_smooth(data=nighttrend,
+    #            aes(x=RelativeDay,y=RateRatio,color=factor(Year)),
+    #            method="loess",
+    #            span=0.1,
+    #            se=FALSE) + 
+    geom_smooth(data=nighttrend,
+                aes(x=RelativeDay,y=RateRatio,color=factor(Year)), 
+                method="loess",
+                span=7/365,
+                se=TRUE,
+                alpha=0.5,
+                colour="blue4",
+                fill="blue1") + 
+    geom_vline(xintercept=c(0,7,237,244)) + 
+    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Day of the year (indexed to DST transition)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SEM)") +
+    ggtitle("Individual-scaled day and night Rate Ratio trends over a year, indexed to DST") + 
+    #ylim(0.5,2.25) + 
+    theme_bw() + 
+    theme(legend.title = element_blank()))
+dev.off()
+
+print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
     geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="orange1") + 
@@ -2161,19 +2195,19 @@ ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled day and night Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
 
-#png("Individual-scaled day and night rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-ggplot() + 
+png("Individual-scaled day and night rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
     geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="orange1") + 
@@ -2184,14 +2218,14 @@ ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled day and night Rate Ratio trends over a year, indexed to DST") + 
     #ylim(0.5,2) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
-#dev.off()
+    theme(legend.title = element_blank()))
+dev.off()
 
-ggplot() + 
+print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
     geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="orange1") + 
@@ -2200,19 +2234,19 @@ ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled daytime Rate Ratio trends over a year, indexed to DST") + 
     ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
 
-#png("Individual-scaled daytime rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-ggplot() + 
+png("Individual-scaled daytime rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
     geom_line(data=daystats, aes(x=RelativeDay,y=Mean),size=1,color="orange1") + 
@@ -2221,14 +2255,14 @@ ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled daytime Rate Ratio trends over a year, indexed to DST") + 
     ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
-#dev.off()
+    theme(legend.title = element_blank()))
+dev.off()
 
-ggplot() + 
+print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
     geom_line(data=nightstats, aes(x=RelativeDay,y=Mean),size=1,color="blue4") + 
@@ -2237,19 +2271,19 @@ ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled nighttime Rate Ratio trends over a year, indexed to DST") + 
     ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
+    theme(legend.title = element_blank()))
 
-#png("Individual-scaled nighttime rate ratio trends over a year, indexed to DST.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-ggplot() + 
+png("Individual-scaled nighttime rate ratio trends over a year, indexed to DST.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot() + 
     #geom_point(data=daytrend, aes(x=RelativeDay,y=RateRatio,color=Year), alpha=0.01) + 
     geom_hline(yintercept = 1, linetype = 3) + 
     geom_line(data=nightstats, aes(x=RelativeDay,y=Mean),size=1,color="blue4") + 
@@ -2258,12 +2292,12 @@ ggplot() +
     annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
     annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
     xlab("Day of the year (indexed to DST transition)") +
-    ylab("Daily Rate Ratio trends over a year (mean ± SD)") +
+    ylab("Daily Rate Ratio trends over a year (mean \u00b1SD)") +
     ggtitle("Individual-scaled nighttime Rate Ratio trends over a year, indexed to DST") + 
     ylim(0.5,2.25) + 
     theme_bw() + 
-    theme(legend.title = element_blank())
-#dev.off()
+    theme(legend.title = element_blank()))
+dev.off()
 ```
   
 Seizure count comparisons by weekday  
@@ -2273,6 +2307,928 @@ compareweekdays <- function(firstweek=Sz08to16wkofDST,
                             wkone="week of DST",
                             wktwo="all non DST") {
     
+    list <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
+    week2weekstats <- data.frame("Weekday"=character(),
+                                 "DSTmean"=numeric(),
+                                 "DSTsd"=numeric(),
+                                 "COMPmean"=numeric(),
+                                 "COMPsd"=numeric(),
+                                 "FreqP"=numeric(),
+                                 "FreqT"=numeric(),
+                                 "Freqdf"=numeric(),
+                                 "Freqd"=numeric(),
+                                 "RateRatio"=numeric(),
+                                 "lCI"=numeric(),
+                                 "uCI"=numeric(),
+                                 "RRP"=numeric(),
+                                 "RRT"=numeric(),
+                                 "RRdf"=numeric(),
+                                 "RRd"=numeric(),
+                                 stringsAsFactors = F)
+    
+    #Get firstweek's scaled data
+    firstscld <- firstweek[,c("datetime","AtRiskperDAY","scldIncidenceperDAY")]
+    firstscld$datetime <- as.Date(firstscld$datetime,'America/Los_Angeles')
+    firstscld <- unique(firstscld)
+    names(firstscld)[1] <- "Var1"
+    duplicated(firstscld) #no duplicated entries (confirms the AtRisk and scldIncidence values are correct)
+    
+    #Get secondweek's scaled data
+    secondscld <- secondweek[,c("datetime","AtRiskperDAY","scldIncidenceperDAY")]
+    secondscld$datetime <- as.Date(secondscld$datetime,'America/Los_Angeles')
+    secondscld <- unique(secondscld)
+    names(secondscld)[1] <- "Var1"
+    duplicated(secondscld) #no duplicated entries (confirms the AtRisk and scldIncidence values are correct)
+    
+    week2week <- data.frame("Weekday"=character(),
+                            "Year"=numeric(),
+                            "RateRatio"=numeric(),
+                            stringsAsFactors = F)
+    
+    firstdf <- data.frame("Week"=character(),
+                          "Weekday"=character(),
+                          "Mean_Sz_count"=numeric(),
+                          "sd"=numeric(),
+                          "se"=numeric(),
+                          stringsAsFactors = F)
+    seconddf <- data.frame("Week"=character(),
+                           "Weekday"=character(),
+                           "Mean_Sz_count"=numeric(),
+                           "sd"=numeric(),
+                           "se"=numeric(),
+                           stringsAsFactors = F)
+    counter=1
+    for(i in list) {
+        #Get seizure counts for each day of the week in DST
+        #-this is tabulated BY DATE (i.e. all Sz on Sunday 2008-03-16)
+        #-this allows for independent t-tests (albeit suboptimal compared to paired t-tests)
+        wkdayinDST <- firstweek[which(firstweek$wkday == i),"datetime"]
+        wkdaycount <- table(as.Date(wkdayinDST,'America/Los_Angeles'))
+        wkdaycountdf <- as.data.frame(wkdaycount)
+        wkdayscld <- wkdaycountdf
+        wkdayscld$Var1 <- as.Date(as.POSIXct(as.character(wkdayscld$Var1)),'America/Los_Angeles')
+        wkdayscld <- merge.data.frame(x=wkdayscld,y=firstscld,all.x=T,sort=F)
+        
+        #Get seizure counts for each day of the week not in DST
+        #-this is tabulated BY DATE (i.e. all Sz on Sunday 2008-03-16)
+        wkdaynonDST <- secondweek[which(secondweek$wkday == i),"datetime"]
+        wkdaycounts <- table(as.Date(wkdaynonDST,'America/Los_Angeles'))
+        wkdaycountsdf <- as.data.frame(wkdaycounts)
+        wkday2scld <- wkdaycountsdf
+        wkday2scld$Var1 <- as.Date(as.POSIXct(as.character(wkday2scld$Var1)),'America/Los_Angeles')
+        wkday2scld <- merge.data.frame(x=wkday2scld,y=secondscld,all.x=T,sort=F)
+        
+        ###WEIGHTED###
+        weightedT <- wtd.t.test(wkday2scld$Freq,wkdayscld$Freq,wkday2scld$AtRiskperDAY,wkdayscld$AtRiskperDAY)
+        week2weekstats[counter, "Weekday"] <- i
+        week2weekstats[which(week2weekstats$Weekday == i),"FreqT"] <- weightedT$coefficients[[1]]
+        week2weekstats[which(week2weekstats$Weekday == i),"Freqdf"] <- weightedT$coefficients[[2]]
+        week2weekstats[which(week2weekstats$Weekday == i),"FreqP"] <- weightedT$coefficients[[3]]
+        print(weightedT)
+        CohenD <- cohen.d(wkday2scld$Freq,wkdayscld$Freq)
+        week2weekstats[which(week2weekstats$Weekday == i),"Freqd"] <- CohenD$estimate[[1]]
+        print(CohenD)
+        week2weekstats[which(week2weekstats$Weekday == i),"COMPmean"] <- wt.mean(wkday2scld$Freq,wkday2scld$AtRiskperDAY)
+        print(paste(i,wktwo,"Sz counts 2008-2016 weighted mean:",round(wt.mean(wkday2scld$Freq,wkday2scld$AtRiskperDAY),2)))
+        week2weekstats[which(week2weekstats$Weekday == i),"COMPsd"] <- wt.sd(wkday2scld$Freq,wkday2scld$AtRiskperDAY)
+        print(paste(i,wktwo,"Sz counts 2008-2016 SD:",round(wt.sd(wkday2scld$Freq,wkday2scld$AtRiskperDAY),2)))
+        week2weekstats[which(week2weekstats$Weekday == i),"DSTmean"] <- wt.mean(wkdayscld$Freq,wkdayscld$AtRiskperDAY)
+        print(paste(i,wkone,"Sz counts 2008-2016 mean:",round(wt.mean(wkdayscld$Freq,wkdayscld$AtRiskperDAY),2)))
+        week2weekstats[which(week2weekstats$Weekday == i),"DSTsd"] <- wt.sd(wkdayscld$Freq,wkdayscld$AtRiskperDAY)
+        print(paste(i,wkone,"Sz counts 2008-2016 SD:",round(wt.sd(wkdayscld$Freq,wkdayscld$AtRiskperDAY),2)))
+        
+        wkday4merge <- wkdayscld
+        wkday24merge <- wkday2scld
+        wkday4merge$Var1 <- year(wkday4merge$Var1)
+        wkday24merge$Var1 <- year(wkday24merge$Var1)
+        #x is second week, y is first week (flipped)
+        wkdayMERGED <- merge.data.frame(wkday24merge,wkday4merge,by.x="Var1",by.y="Var1",all.x=T)
+        wkdayMERGED$RateRatio <- wkdayMERGED$scldIncidenceperDAY.y/wkdayMERGED$scldIncidenceperDAY.x #Rate Ratio from first week (usually DST)/second week (usually comparison week)
+        
+        baselinerisk <- rep(1,nrow(wkdayscld))
+        
+        weightedT <- wtd.t.test(wkdayMERGED$RateRatio,baselinerisk,wkdayMERGED$AtRiskperDAY.x,wkdayscld$AtRiskperDAY)
+        week2weekstats[which(week2weekstats$Weekday == i),"RRT"] <- weightedT$coefficients[[1]]
+        week2weekstats[which(week2weekstats$Weekday == i),"RRdf"] <- weightedT$coefficients[[2]]
+        week2weekstats[which(week2weekstats$Weekday == i),"RRP"] <- weightedT$coefficients[[3]]
+        print(weightedT)
+        CohenD <- cohen.d(wkdayMERGED$RateRatio,baselinerisk)
+        week2weekstats[which(week2weekstats$Weekday == i),"RRd"] <- CohenD$estimate[[1]]
+        print(CohenD)
+        week2weekstats[which(week2weekstats$Weekday == i),"RateRatio"] <- wt.mean(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)
+        print(paste(i,"mean rate ratio of",wkone,"to",wktwo,":",wt.mean(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)))
+        print(paste(i,"SD rate ratio of",wkone,"to",wktwo,":",wt.sd(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)))
+        week2weekstats[which(week2weekstats$Weekday == i),"lCI"] <- wt.mean(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)-1.96*wt.sd(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)/sqrt(length(wkdayMERGED$RateRatio))
+        week2weekstats[which(week2weekstats$Weekday == i),"uCI"] <- wt.mean(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)+1.96*wt.sd(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)/sqrt(length(wkdayMERGED$RateRatio))
+        print(paste(i,"95% CI of rate ratio of",wkone,"to",wktwo,":",
+                    round(wt.mean(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)-1.96*wt.sd(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)/sqrt(length(wkdayMERGED$RateRatio)),2),
+                    "to",
+                    round(wt.mean(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)+1.96*wt.sd(wkdayMERGED$RateRatio,wkdayMERGED$AtRiskperDAY.x)/sqrt(length(wkdayMERGED$RateRatio)),2)))
+        
+        firstdf[counter,"Week"] <- wkone
+        firstdf[counter,"Weekday"] <- i
+        firstdf[counter,"Mean_Sz_count"] <- wt.mean(wkdayscld$Freq,wkdayscld$AtRiskperDAY)
+        firstdf[counter,"sd"] <- wt.sd(wkdayscld$Freq,wkdayscld$AtRiskperDAY)
+        firstdf[counter,"se"] <- wt.sd(wkdayscld$Freq,wkdayscld$AtRiskperDAY)/sqrt(nrow(wkdayscld))
+        
+        seconddf[counter,"Week"] <- wktwo
+        seconddf[counter,"Weekday"] <- i
+        seconddf[counter,"Mean_Sz_count"] <- wt.mean(wkday2scld$Freq,wkday2scld$AtRiskperDAY)
+        seconddf[counter,"sd"] <- wt.sd(wkday2scld$Freq,wkday2scld$AtRiskperDAY)
+        seconddf[counter,"se"] <- wt.sd(wkday2scld$Freq,wkday2scld$AtRiskperDAY)/sqrt(nrow(wkday2scld))
+        
+        ##Need a week2week for raw data to put into geom_boxplot
+        FORweek2week <- data.frame("RateRatio"=wkdayMERGED$RateRatio)
+        FORweek2week$"Weekday" <- i
+        FORweek2week$"Year" <- wkdayMERGED$Var1
+        FORweek2week <- FORweek2week[,c(2,3,1)]
+        week2week <- rbind(week2week,FORweek2week)
+        
+        counter=counter+1
+    }
+    
+    write.table(week2weekstats,
+                file = paste("week2week_weekdaySTATS_",wkone,"_",wktwo,".txt",sep=""),
+                quote = F,
+                row.names = F)
+    
+    factorlevels <- factor(list,levels=list)
+    week2week$Weekday <- factor(week2week$Weekday, levels = factorlevels) #Ensures Weekdays stay in the same order, despite coercing to factors
+    
+    #Now plot the rate ratios, by weekday
+    print(ggplot() + 
+        geom_boxplot(data=week2week[,c("Weekday","RateRatio")],
+                     aes(x=Weekday, y=RateRatio),
+                     fill="#4271AE",
+                     alpha=0.5,
+                     outlier.size=-1) + #Avoid duplicate outlier plotting
+        geom_point(data=week2week,
+                   aes(x=Weekday, y=RateRatio, color=factor(Year)),
+                   alpha=1,
+                   size=3) +
+        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
+        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
+                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
+                   linetype=3) + 
+        xlab("Weekday") +
+        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
+        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",
+                      wkone,
+                      " to ",
+                      wktwo,
+                      " over ",
+                      min(year(Sz08to16$datetime)),
+                      " to ",
+                      max(year(Sz08to16$datetime)),sep="")) + 
+        theme_bw() + 
+        theme(legend.title = element_blank()))
+    
+    #The above demonstrates pretty extreme outliers (particularly in the first full year...possibly bias from high-documentation rates and low population counts)
+    # -Seems reasonable to remove those beyond 3 SD (particularly for the case of the whole-year-as-baseline comparisons)
+    week2week <- week2week[which(week2week$RateRatio > (mean(week2week$RateRatio)-3*sd(week2week$RateRatio)) & week2week$RateRatio < (mean(week2week$RateRatio)+3*sd(week2week$RateRatio))),]
+    
+    #Now plot the rate ratios again with extreme outliers removed
+    print(ggplot() + 
+        geom_boxplot(data=week2week[,c("Weekday","RateRatio")],
+                     aes(x=Weekday, y=RateRatio),
+                     fill="#4271AE",
+                     alpha=0.5,
+                     outlier.size=-1) + #Avoid duplicate outlier plotting
+        geom_point(data=week2week,
+                   aes(x=Weekday, y=RateRatio, color=factor(Year)),
+                   alpha=1,
+                   size=3) +
+        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
+        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
+                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
+                   linetype=3) + 
+        xlab("Weekday") +
+        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
+        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",
+                      wkone,
+                      " to ",
+                      wktwo,
+                      " over ",
+                      min(year(Sz08to16$datetime)),
+                      " to ",
+                      max(year(Sz08to16$datetime)),sep="")) + 
+        theme_bw() + 
+        theme(legend.title = element_blank()))
+    
+    png(paste("Rate Ratios comparing ",wkone," and ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    print(ggplot() + 
+        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
+        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
+                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
+                   linetype=3) + 
+        xlab("Weekday") +
+        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
+        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
+        theme_bw() + 
+        theme(legend.title = element_blank()))
+    dev.off()
+    
+    firstdf$Weekday <- factor(firstdf$Weekday, levels = firstdf$Weekday) #ensures weekdays stay in order Sun-Sat
+    seconddf$Weekday <- factor(seconddf$Weekday, levels = seconddf$Weekday) #ensures weekdays stay in order Sun-Sat
+    comparedf <- rbind(firstdf,seconddf)
+    
+    png(paste("Comparison between ",wkone," and ",wktwo,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    print(ggplot(comparedf, aes(x=Weekday, y=Mean_Sz_count, fill=Week)) + 
+        geom_bar(position=position_dodge(), stat="identity",
+                 colour="black", # Use black outlines,
+                 size=.3) +      # Thinner lines
+        #stat_compare_means(aes(group = Week), label = "p.signif", label.y = 300)
+        geom_errorbar(aes(ymin=Mean_Sz_count-se, ymax=Mean_Sz_count+se),
+                      size=.3,    # Thinner lines
+                      width=.2,
+                      position=position_dodge(.9)) +
+        xlab("Weekday") +
+        ylab("Number of seizures (\u00b1SEM)") +
+        scale_fill_hue(name=paste(wkone,"vs",wktwo), # Legend label, use darker colors
+                       breaks=c(wkone, wktwo),
+                       labels=c(wkone, wktwo)) +
+        ggtitle("Comparison of seizures on a given weekday") +
+        scale_y_continuous(breaks=0:500*100) +
+        theme_bw())
+    dev.off()
+}
+```
+  
+Compare DST to non-DST  
+```{r DST to non-DST, echo=FALSE}
+compareweekdays(firstweek=Sz08to16wkofDST,
+                secondweek=Sz08to16notDST,
+                wkone="week of DST",
+                wktwo="all non DST")
+```
+  
+Compare DST to pre-DST  
+```{r DST to pre-DST, echo=FALSE}
+compareweekdays(firstweek=Sz08to16wkofDST,
+                secondweek=Sz08to16wkpreDST,
+                wkone="week of DST",
+                wktwo="preDST week")
+```
+  
+Compare DST to the week post-DST week  
+```{r DST to post-DST, echo=FALSE}
+compareweekdays(firstweek=Sz08to16wkofDST,
+                secondweek=Sz08to16wkpostDST,
+                wkone="week of DST",
+                wktwo="week after DST week")
+```
+  
+Compare DST to ST  
+```{r DST to ST, echo=FALSE}
+compareweekdays(firstweek=Sz08to16wkofDST,
+                secondweek=Sz08to16wkofST,
+                wkone="week of DST",
+                wktwo="ST start week")
+```
+  
+Compare ST to pre-ST  
+```{r DST to pre-ST, echo=FALSE}
+compareweekdays(firstweek=Sz08to16wkofST,
+                secondweek=Sz08to16wkpreST,
+                wkone="week of ST",
+                wktwo="preST week")
+```
+  
+Compare ST to the week post-ST week  
+```{r DST to post-ST, echo=FALSE}
+compareweekdays(firstweek=Sz08to16wkofST,
+                secondweek=Sz08to16wkpostST,
+                wkone="week of ST",
+                wktwo="week after ST week")
+```
+  
+  
+Visual demonstration of seizure rates registered to the DST time period  
+```{r daily seizure rates graph, echo=FALSE}
+Sz4timeplot <- Sz08to16[,c("datetime","DSTday","STday")]
+Sz4timeplot$time0 <- yday(Sz08to16$datetime) - Sz08to16$DSTday
+summary(Sz4timeplot) #things are now registered to DST's Sunday as t=0
+Sz4timeplot$year <- year(Sz08to16$datetime)
+
+table(Sz4timeplot$time0) #Shows that the extreme tails are undersampled (due to variability in onset/offset of DST)...hence usage of SEM
+yearlist <- c(min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) #Bound years by the bounds of the dataset
+CountsByYear <- data.frame("Index"=seq(min(Sz4timeplot$time0),max(Sz4timeplot$time0),1))
+colID <- 2
+for(i in yearlist) {
+    yearlyCount <- Sz4timeplot[which(year(Sz4timeplot$datetime) == i),"time0"]
+    table(yearlyCount)
+    CountsByYear <- merge.data.frame(CountsByYear,as.data.frame(t(table(yearlyCount)))[,2:3],by.x="Index",by.y="yearlyCount",all.x = T)
+    names(CountsByYear)[colID] <- i
+    colID <- colID+1
+}
+fromcol <- grep(min(year(Sz08to16$datetime)), colnames(CountsByYear))
+tocol <- grep(max(year(Sz08to16$datetime)), colnames(CountsByYear))
+CountsByYear <- cbind(CountsByYear,
+                      Mean=apply(CountsByYear[,fromcol:tocol],1,mean,na.rm=T),
+                      SD=apply(CountsByYear[,fromcol:tocol],1,sd,na.rm=T))
+for(i in 1:nrow(CountsByYear)) {
+    CountsByYear[i,"SEM"] <- CountsByYear[i,"SD"]/sqrt(sum(!is.na(CountsByYear[i,fromcol:tocol])))
+}
+TallCount <- data.frame("Index"=numeric(),
+                        "SzCount"=numeric(),
+                        "Year"=numeric())
+for(i in yearlist) {
+    FORtall <- CountsByYear[,c("Index",i)]
+    names(FORtall)[2] <- "SzCount"
+    FORtall$Year <- i
+    TallCount <- rbind(TallCount,FORtall)
+}
+#CountsByYear$Mean <- rowMeans(CountsByYear[,fromcol:tocol], na.rm=T)
+#SDtemp <- transform(CountsByYear[,fromcol:tocol], SD=apply(CountsByYear[,fromcol:tocol],1,sd,na.rm=T))
+
+png("Yearly trend.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot(CountsByYear, aes(x=Index,y=Mean)) + 
+    stat_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3) + #using loess smoothing with proportional smoothing from 7 out of 365 days
+    geom_vline(xintercept=c(0,7,237,244)) + 
+    annotate("rect", xmin=7, xmax=237, ymin=-Inf, ymax=Inf, alpha=0.2, fill="yellow") + 
+    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Day of the year (indexed to DST transition)") +
+    ylab("Seizure counts per day (mean \u00b1SEM)") +
+    ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
+    theme_bw())
+dev.off()
+
+print(ggplot(CountsByYear, aes(x=Index,y=Mean)) + 
+    stat_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3) + #using loess smoothing with proportional smoothing from 7 out of 365 days
+    geom_vline(xintercept=c(0,7,237,244)) + 
+    annotate("rect", xmin=7, xmax=237, ymin=-Inf, ymax=Inf, alpha=0.2, fill="yellow") + 
+    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Day of the year (indexed to DST transition)") +
+    ylab("Seizure counts per day (mean \u00b1SEM)") +
+    ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
+    theme_bw())
+
+###May consider making CountsByYear a tall matrix and then coloring by year using methods from http://ggplot2.tidyverse.org/reference/geom_smooth.html
+#library(RColorBrewer)
+png("Yearly trend_with points.png", 
+    width = 9, 
+    height = 6, 
+    units = 'in', 
+    bg = "transparent", 
+    res = 300)
+print(ggplot(TallCount, aes(x=Index,y=SzCount,color=Year)) + 
+      geom_point() + 
+      #scale_x_continuous(breaks = c(cat(yearlist,sep=","))) + 
+      #scale_color_brewer(breaks = c(cat(paste(shQuote(yearlist,type="cmd"),collapse=","))),
+      #scale_color_brewer(breaks = c(cat(yearlist,sep=",")), palette="Set3") + #http://www.sthda.com/english/wiki/ggplot2-colors-how-to-change-colors-automatically-and-manually
+      geom_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3, colour="red") + 
+      geom_vline(xintercept=c(0,7,237,244)) + 
+      annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+      annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+      xlab("Day of the year (indexed to DST transition)") +
+      ylab("Seizure counts per day (mean \u00b1SEM)") +
+      ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) + 
+      ylim(0,quantile(TallCount$SzCount, 0.99, na.rm=T)[[1]]) + 
+      theme_bw())
+dev.off()
+
+print(ggplot(TallCount, aes(x=Index,y=SzCount,color=Year)) + 
+    geom_point() + 
+    #scale_x_continuous(breaks = c(cat(yearlist,sep=","))) + 
+    #scale_color_brewer(breaks = c(cat(paste(shQuote(yearlist,type="cmd"),collapse=","))),
+    #scale_color_brewer(breaks = c(cat(yearlist,sep=",")), palette="Set3") + #http://www.sthda.com/english/wiki/ggplot2-colors-how-to-change-colors-automatically-and-manually
+    geom_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3, colour="red") + 
+    geom_vline(xintercept=c(0,7,237,244)) + 
+    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
+    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
+    xlab("Day of the year (indexed to DST transition)") +
+    ylab("Seizure counts per day (mean \u00b1SEM)") +
+    ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) + 
+    ylim(0,quantile(TallCount$SzCount, 0.99, na.rm=T)[[1]]) + 
+    theme_bw())
+```
+  
+Weekly comparisons  
+#Note: Rate Ratios are calculated as DST incidence/other week incidence (thus RR > 1 => increased risk of seizures in DST, relative to the comparison)  
+```{r weekly comparisons}
+#Find out what week DST is in, register to that then calculate
+#If wanting to do comparison to the every-non-DST-week baseline, then second week must be Sz08to16nonDST/"all non DST"
+compareweeks <- function(firstweek=Sz08to16wkofDST,
+                         secondweek=Sz08to16notDST,
+                         wkone="week of DST",
+                         wktwo="all non DST") {
+    
+    #Get seizure counts for the week in DST
+    #-this allows for independent t-tests (albeit suboptimal compared to paired t-tests)
+    DSTweekCount <- as.data.frame(table(year(firstweek$datetime)))
+    DSTweekNum <- DSTweekCount
+    DSTweekNum$Var1 <- as.numeric(seq(from=min(year(firstweek$datetime)),to=max(year(firstweek$datetime)))) #need to make numeric
+    DSTweekWeights <- data.frame("Var1"=numeric(),
+                                 "Weights"=numeric())
+    #generate average weekly counts of AtRisk, for weighted averages
+    counter=1
+    for(i in min(as.numeric(DSTweekNum$Var1)):max(as.numeric(DSTweekNum$Var1))){
+        DSTweekWeights[counter,"Var1"] <- i
+        DSTweekWeights[counter,"Weights"] <- mean(firstweek[which(year(firstweek$datetime) == i),"AtRiskperWEEK"])
+        counter=counter+1
+    }
+    
+    week2weekstats <- data.frame("epoch"=character(),
+                                 "DSTmean"=numeric(),
+                                 "DSTsd"=numeric(),
+                                 "COMPmean"=numeric(),
+                                 "COMPsd"=numeric(),
+                                 "FreqP"=numeric(),
+                                 "FreqT"=numeric(),
+                                 "Freqdf"=numeric(),
+                                 "Freqd"=numeric(),
+                                 "RateRatio"=numeric(),
+                                 "lCI"=numeric(),
+                                 "uCI"=numeric(),
+                                 "RRP"=numeric(),
+                                 "RRT"=numeric(),
+                                 "RRdf"=numeric(),
+                                 "RRd"=numeric(),
+                                 stringsAsFactors = F)
+    
+    if(identical(secondweek,Sz08to16notDST)) { #For the all-non-DST-weeks-as-baseline comparison
+        #Get seizure counts for week(s) not in DST
+        NONweekdf <- secondweek[,c("datetime","weeknum","DSTweek")]
+        NONweekdf <- NONweekdf[-which(NONweekdf$weeknum == NONweekdf$DSTweek),] #ensures no DST-week counts are included
+        NONweekdf$year <- year(NONweekdf$datetime)
+        table(NONweekdf$weeknum,NONweekdf$year)
+        NONweekCount <- as.data.frame(table(NONweekdf$weeknum,NONweekdf$year))
+        NONweekCount[NONweekCount == 0] <- NA #replace non-existing weeks (e.g. year without the 53rd week, DST)
+        
+        #T-tests (x is for week of DST, y is for comparison week(s)):
+        print(t.test(DSTweekCount$Freq,NONweekCount$Freq))
+    
+        NON4gg <- NONweekCount[,2:3]
+        names(NON4gg) <- c("Year","Freq")
+        NON4gg$Year <- as.factor(NON4gg$Year)
+        DST4gg <- DSTweekCount
+        names(DST4gg) <- c("Year","Freq")
+        DST4gg$Year <- as.factor(DST4gg$Year)
+        
+        #Plot it
+        print(ggplot() + 
+            geom_jitter(data=NON4gg, aes(x=Year,y=Freq), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
+            geom_boxplot(data=NON4gg, aes(x=Year,y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
+            geom_point(data=DST4gg, aes(x=Year,y=Freq), color="red", size=4, shape=18) + 
+            xlab("Year") +
+            ylab("Seizure Counts (per week)") +
+            ggtitle(paste("Percentile for ",wkone," seizure counts, per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
+            theme_bw())
+        
+        png(paste("Percentile for ",wkone," seizure counts, per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+            width = 9, 
+            height = 6, 
+            units = 'in', 
+            bg = "transparent", 
+            res = 300)
+        print(ggplot() + 
+            geom_jitter(data=NON4gg, aes(x=Year,y=Freq), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
+            geom_boxplot(data=NON4gg, aes(x=Year,y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
+            geom_point(data=DST4gg, aes(x=Year,y=Freq), color="red", size=4, shape=18) + 
+            xlab("Year") +
+            ylab("Seizure Counts (per week)") +
+            ggtitle(paste("Percentile for ",wkone," seizure counts, per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
+            theme_bw())
+        dev.off()
+        
+        #Make Z-score comparison
+        Zweek <- data.frame("Year"=numeric(),
+                            "PopMean"=numeric(),
+                            "PopSD"=numeric(),
+                            "SzCount"=numeric(),
+                            "Zscore"=numeric(),
+                            "Percentile"=numeric())
+        counter=1
+        for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+            Zweek[counter,"Year"] <- i
+            Zweek[counter,"PopMean"] <- mean(na.omit(NONweekCount[which(NONweekCount$Var2 == i),"Freq"]))
+            Zweek[counter,"PopSD"] <- sd(na.omit(NONweekCount[which(NONweekCount$Var2 == i),"Freq"]))
+            Zweek[counter,"SzCount"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]
+            Zweek[counter,"Zscore"] <- (Zweek[counter,"SzCount"]-Zweek[counter,"PopMean"])/Zweek[counter,"PopSD"]
+            Zweek[counter,"Percentile"] <- round(pnorm(Zweek[counter,"Zscore"])*100,2)
+            counter=counter+1
+        }
+        write.table(Zweek,
+                    file = paste("Yearly percentiles by week ",wkone,".txt",sep=""),
+                    quote = F,
+                    row.names = F)
+        Zweek$Year <- as.factor(Zweek$Year)
+        #library(ggplot2)
+
+        print(ggplot(Zweek[,c("Year","Percentile")], aes(x=Year, y=Percentile)) + 
+            geom_bar(position=position_dodge(), stat="identity",
+                     colour="black", # Use black outlines,
+                     size=.3) +      # Thinner lines
+            geom_hline(yintercept = mean(Zweek$Percentile)) + 
+            geom_hline(yintercept = c(mean(Zweek$Percentile)+sd(Zweek$Percentile),
+                                      mean(Zweek$Percentile)-sd(Zweek$Percentile)),
+                       linetype=3) + 
+            xlab("Year") +
+            ylab("Percentile") +
+            ggtitle(paste("Percentile of seizure counts for ",wkone," per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) +
+            scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
+            theme_bw())
+        
+        png(paste("Percentile of seizure counts for ",wkone," per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+            width = 9, 
+            height = 6, 
+            units = 'in', 
+            bg = "transparent", 
+            res = 300)
+        print(ggplot(Zweek[,c("Year","Percentile")], aes(x=Year, y=Percentile)) + 
+            geom_bar(position=position_dodge(), stat="identity",
+                     colour="black", # Use black outlines,
+                     size=.3) +      # Thinner lines
+            geom_hline(yintercept = mean(Zweek$Percentile)) + 
+            geom_hline(yintercept = c(mean(Zweek$Percentile)+sd(Zweek$Percentile),
+                                      mean(Zweek$Percentile)-sd(Zweek$Percentile)),
+                       linetype=3) + 
+            xlab("Year") +
+            ylab("Percentile") +
+            ggtitle(paste("Percentile of seizure counts for ",wkone," per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) +
+            scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
+            theme_bw())
+        dev.off()
+        
+        for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+            #Subsetting for the year of interest
+            thisyear <- Sz08to16[which(year(Sz08to16$datetime) == i),]
+            firstyear <- firstweek[which(year(firstweek$datetime) == i),]
+            secondyear <- secondweek[which(year(secondweek$datetime) == i),]
+            
+            #Try using denominator estimated by number of individuals recording through the end of the period of interest
+            firstdenomdf <- Sz08to16[which(Sz08to16$datetime <= as.Date(max(firstyear$datetime),'America/Los_Angeles')),"Unlinked_ID"]
+            firstdenom <- length(unique(firstdenomdf))
+            baselineweeklist <- na.omit(NONweekCount[which(NONweekCount$Var2 == i),"Var1"])
+            
+            #Have to do this for each week in the baseline (NON DST) period
+            for (j in baselineweeklist) {
+                weeksend <- max(as.Date(secondyear[which(epiweek(secondyear$datetime) == as.numeric(j)),"datetime"],'America/Los_Angeles'))
+                seconddenomdf <- Sz08to16[which(as.Date(Sz08to16$datetime,'America/Los_Angeles') <= weeksend),"Unlinked_ID"]
+                seconddenom <- length(unique(seconddenomdf))
+                NONweekCount[which(NONweekCount$Var1 == as.numeric(j) & NONweekCount$Var2 == i),"AtRisk"] <- seconddenom
+                NONweekCount[which(NONweekCount$Var1 == as.numeric(j) & NONweekCount$Var2 == i),"Incidence"] <- NONweekCount[which(NONweekCount$Var1 == as.numeric(j) & NONweekCount$Var2 == i),"Freq"]/seconddenom
+            }
+            NONweekCount[which(NONweekCount$Var2 == i),"DSTFreq"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]
+            NONweekCount[which(NONweekCount$Var2 == i),"DSTAtRisk"] <- firstdenom
+            NONweekCount[which(NONweekCount$Var2 == i),"DSTIncidence"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]/firstdenom
+            NONweekCount$RateRatio <- NONweekCount$DSTIncidence/NONweekCount$Incidence
+            
+        }
+        
+        print(ggplot() + 
+            geom_jitter(data=NONweekCount, aes(x=Var2,y=RateRatio), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
+            geom_boxplot(data=NONweekCount, aes(x=Var2,y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
+            xlab("Year") +
+            ylab(paste("Rate Ratios (",wkone," vs each week of the year)",sep="")) +
+            ggtitle(paste("Comparison of weekly seizure Rate Ratios for",wkone,min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)),sep=" ")) + 
+            geom_hline(yintercept = mean(NONweekCount$RateRatio,na.rm=T)) + 
+            geom_hline(yintercept = c(mean(NONweekCount$RateRatio,na.rm=T)+1.96*sd(NONweekCount$RateRatio,na.rm=T),
+                                      mean(NONweekCount$RateRatio,na.rm=T)-1.96*sd(NONweekCount$RateRatio,na.rm=T)),
+                       linetype=3) + 
+            ylim((mean(NONweekCount$RateRatio,na.rm=T)-2*sd(NONweekCount$RateRatio,na.rm=T)),(mean(NONweekCount$RateRatio,na.rm=T)+2*sd(NONweekCount$RateRatio,na.rm=T))) + 
+            theme_bw())
+        
+        #Those outliers look quite spurious, so cutting them out at the >3SD threshold and comparing again
+        NONweek4gg <- NONweekCount[which(NONweekCount$RateRatio < (mean(NONweekCount$RateRatio,na.rm=T)+3*sd(NONweekCount$RateRatio,na.rm=T)) & NONweekCount$RateRatio > (mean(NONweekCount$RateRatio,na.rm=T)-3*sd(NONweekCount$RateRatio,na.rm=T))),]
+        
+        print(ggplot() + 
+            geom_jitter(data=NONweek4gg, aes(x=Var2,y=RateRatio), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
+            geom_boxplot(data=NONweek4gg, aes(x=Var2,y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
+            xlab("Year") +
+            ylab(paste("Rate Ratios (",wkone," vs each week of the year)",sep="")) +
+            ggtitle(paste("Comparison of weekly seizure Rate Ratios for",wkone,min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)),sep=" ")) + 
+            geom_hline(yintercept = mean(NONweek4gg$RateRatio,na.rm=T)) + 
+            geom_hline(yintercept = c(mean(NONweek4gg$RateRatio,na.rm=T)+1.96*sd(NONweek4gg$RateRatio,na.rm=T),
+                                      mean(NONweek4gg$RateRatio,na.rm=T)-1.96*sd(NONweek4gg$RateRatio,na.rm=T)),
+                       linetype=3) + 
+            theme_bw())
+        
+        png(paste("Comparison of weekly seizure Rate Ratios for ",wkone," from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+            width = 9, 
+            height = 6, 
+            units = 'in', 
+            bg = "transparent", 
+            res = 300)
+        print(ggplot() + 
+            geom_jitter(data=NONweek4gg, aes(x=Var2,y=RateRatio), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
+            geom_boxplot(data=NONweek4gg, aes(x=Var2,y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
+            xlab("Year") +
+            ylab(paste("Rate Ratios (",wkone," vs each week of the year)",sep="")) +
+            ggtitle(paste("Comparison of weekly seizure Rate Ratios for",wkone,min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)),sep=" ")) + 
+            geom_hline(yintercept = mean(NONweek4gg$RateRatio,na.rm=T)) + 
+            geom_hline(yintercept = c(mean(NONweek4gg$RateRatio,na.rm=T)+1.96*sd(NONweek4gg$RateRatio,na.rm=T),
+                                      mean(NONweek4gg$RateRatio,na.rm=T)-1.96*sd(NONweek4gg$RateRatio,na.rm=T)),
+                       linetype=3) + 
+            theme_bw())
+        dev.off()
+        
+        names(NONweekCount) <- c("WeekOfYear","Year","Freq","AtRisk","Incidence","DSTFreq","DSTAtRisk","DSTIncidence","RateRatio")
+        forttest <- na.omit(NONweekCount)
+        
+        weightedT <- wtd.t.test(forttest$Freq,unique(forttest$DSTFreq),forttest$AtRisk,unique(forttest$DSTAtRisk))
+        week2weekstats[1, "epoch"] <- "all weeks"
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"FreqT"] <- weightedT$coefficients[[1]]
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"Freqdf"] <- weightedT$coefficients[[2]]
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"FreqP"] <- weightedT$coefficients[[3]]
+        print(weightedT)
+        CohenD <- cohen.d(forttest$Freq,unique(forttest$DSTFreq))
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"Freqd"] <- CohenD$estimate[[1]]
+        print(CohenD)
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"COMPmean"] <- wt.mean(forttest$Freq,forttest$AtRisk)
+        print(paste("All non-DST Sz counts 2008-2016 weighted mean:",round(wt.mean(forttest$Freq,forttest$AtRisk),2)))
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"COMPsd"] <- wt.sd(forttest$Freq,forttest$AtRisk)
+        print(paste("All non-DST Sz counts 2008-2016 SD:",round(wt.sd(forttest$Freq,forttest$AtRisk),2)))
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"DSTmean"] <- wt.mean(unique(forttest$DSTFreq),unique(forttest$DSTAtRisk))
+        print(paste("All DST Sz counts 2008-2016 mean:",round(wt.mean(unique(forttest$DSTFreq),unique(forttest$DSTAtRisk)),2)))
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"DSTsd"] <- wt.sd(unique(forttest$DSTFreq),unique(forttest$DSTAtRisk))
+        print(paste("All DST Sz counts 2008-2016 SD:",round(wt.sd(unique(forttest$DSTFreq),unique(forttest$DSTAtRisk)),2)))
+        
+        baselinerisk <- rep(1,length(unique(forttest$DSTAtRisk)))
+        weightedT <- wtd.t.test(forttest$RateRatio,baselinerisk,forttest$AtRisk,unique(forttest$DSTAtRisk))
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"RRT"] <- weightedT$coefficients[[1]]
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"RRdf"] <- weightedT$coefficients[[2]]
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"RRP"] <- weightedT$coefficients[[3]]
+        print(weightedT)
+        CohenD <- cohen.d(forttest$RateRatio,baselinerisk)
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"RRd"] <- CohenD$estimate[[1]]
+        print(CohenD)
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"RateRatio"] <- wt.mean(forttest$RateRatio,forttest$AtRisk)
+        print(paste("Mean of rate ratio of all non-DST weeks:",wt.mean(forttest$RateRatio,forttest$AtRisk)))
+        print(paste("SD of rate ratio of all non-DST weeks:",wt.sd(forttest$RateRatio,forttest$AtRisk)))
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"lCI"] <- wt.mean(forttest$RateRatio,forttest$AtRisk)-1.96*wt.sd(forttest$RateRatio,forttest$AtRisk)/sqrt(length(forttest$RateRatio))
+        week2weekstats[which(week2weekstats$epoch == "all weeks"),"uCI"] <- wt.mean(forttest$RateRatio,forttest$AtRisk)+1.96*wt.sd(forttest$RateRatio,forttest$AtRisk)/sqrt(length(forttest$RateRatio))
+        print(paste("95% CI of rate ratio of all non-DST weeks:",
+                    round(wt.mean(forttest$RateRatio,forttest$AtRisk)-1.96*wt.sd(forttest$RateRatio,forttest$AtRisk)/sqrt(length(forttest$RateRatio)),2),
+                    "to",
+                    round(wt.mean(forttest$RateRatio,forttest$AtRisk)+1.96*wt.sd(forttest$RateRatio,forttest$AtRisk)/sqrt(length(forttest$RateRatio)),2)))
+        
+        write.table(week2weekstats,
+                    file = paste("week2weekSTATS",wkone,wktwo,sep="_"),
+                    quote = F,
+                    row.names = F)
+        
+        write.table(NONweekCount,
+                    file = "Rate Ratios for each week.txt",
+                    quote = F,
+                    row.names = F)
+        
+        
+    } else { #For the single-week-as-baseline comparisons
+        #Get seizure counts for weeks not in DST
+        NONweekCount <- as.data.frame(table(year(secondweek$datetime)))
+        NONweekNum <- NONweekCount
+        NONweekNum$Var1 <- as.numeric(seq(from=min(year(secondweek$datetime)),to=max(year(secondweek$datetime)))) #need to make numeric
+        NONweekWeights <- data.frame("Var1"=numeric(),
+                                     "Weights"=numeric())
+        #generate average weekly counts of AtRisk, for weighted averages
+        counter=1
+        for(i in min(as.numeric(NONweekNum$Var1)):max(as.numeric(NONweekNum$Var1))){
+            NONweekWeights[counter,"Var1"] <- i
+            NONweekWeights[counter,"Weights"] <- mean(secondweek[which(year(secondweek$datetime) == i),"AtRiskperWEEK"])
+            counter=counter+1
+        }
+        
+        ###WAS NOT WEIGHTED###
+        #T-tests (x is for week of DST, y is for comparison week(s)):
+        #print(t.test(DSTweekCount$Freq,NONweekCount$Freq))
+        #print(cohen.d(DSTweekCount$Freq,NONweekCount$Freq))
+        #print(paste(wkone,"Sz counts 2008-2016 mean:",round(mean(DSTweekCount$Freq),2)))
+        #print(paste(wkone,"Sz counts 2008-2016 SD:",round(sd(DSTweekCount$Freq),2)))
+        #print(paste(wktwo,"Sz counts 2008-2016 mean:",round(mean(NONweekCount$Freq),2)))
+        #print(paste(wktwo,"Sz counts 2008-2016 SD:",round(sd(NONweekCount$Freq),2)))
+        
+        ###WEIGHTED###
+        #weightedT <- wtd.t.test(NONweekCount$Freq,DSTweekCount$Freq,NONweekWeights$Weights,DSTweekWeights$Weights)
+        #week2weekstats[1, "epoch"] <- wktwo
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"FreqT"] <- weightedT$coefficients[[1]]
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"Freqdf"] <- weightedT$coefficients[[2]]
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"FreqP"] <- weightedT$coefficients[[3]]
+        #print(weightedT)
+        #CohenD <- cohen.d(NONweekCount$Freq,DSTweekCount$Freq)
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"Freqd"] <- CohenD$estimate[[1]]
+        #print(CohenD)
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"COMPmean"] <- wt.mean(NONweekCount$Freq,NONweekWeights$Weights)
+        #print(paste("All non-DST Sz counts 2008-2016 weighted mean:",round(wt.mean(NONweekCount$Freq,NONweekWeights$Weights),2)))
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"COMPsd"] <- wt.sd(NONweekCount$Freq,NONweekWeights$Weights)
+        #print(paste("All non-DST Sz counts 2008-2016 SD:",round(wt.sd(NONweekCount$Freq,NONweekWeights$Weights),2)))
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"DSTmean"] <- wt.mean(DSTweekCount$Freq,DSTweekWeights$Weights)
+        #print(paste("All DST Sz counts 2008-2016 mean:",round(wt.mean(DSTweekCount$Freq,DSTweekWeights$Weights),2)))
+        #week2weekstats[which(week2weekstats$epoch == wktwo),"DSTsd"] <- wt.sd(DSTweekCount$Freq,DSTweekWeights$Weights)
+        #print(paste("All DST Sz counts 2008-2016 SD:",round(wt.sd(DSTweekCount$Freq,DSTweekWeights$Weights),2)))
+        
+        week2week <- data.frame("Year"=numeric(),
+                                "DSTSzcount"=numeric(),
+                                "DSTatrisk"=numeric(),
+                                "DSTincidence"=numeric(),
+                                "NONSzcount"=numeric(),
+                                "NONatrisk"=numeric(),
+                                "NONincidence"=numeric(),
+                                "RateRatio"=numeric())
+        counter=1
+        for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+            #Subsetting for the year of interest
+            thisyear <- Sz08to16[which(year(Sz08to16$datetime) == i),]
+            firstyear <- firstweek[which(year(firstweek$datetime) == i),]
+            secondyear <- secondweek[which(year(secondweek$datetime) == i),]
+            
+            #Try using denominator estimated by number of individuals recording through the end of the period of interest
+            firstdenomdf <- Sz08to16[which(Sz08to16$datetime <= as.Date(max(firstyear$datetime),'America/Los_Angeles')),"Unlinked_ID"]
+            firstdenom <- length(unique(firstdenomdf))
+            seconddenomdf <- Sz08to16[which(Sz08to16$datetime <= as.Date(max(secondyear$datetime),'America/Los_Angeles')),"Unlinked_ID"]
+            seconddenom <- length(unique(seconddenomdf))
+            print(paste("Rough estimate of difference in 'at risk' individuals: ",abs(firstdenom-seconddenom),"; with ",firstdenom," accumulated individuals by DST week of ",i,sep=""))
+            
+            week2week[counter,"Year"] <- i
+            #week2week[counter,"DSTSzcount"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]
+            #week2week[counter,"DSTatrisk"] <- firstdenom
+            #week2week[counter,"DSTincidence"] <- week2week[counter,"DSTSzcount"]/week2week[counter,"DSTatrisk"]
+            #week2week[counter,"NONSzcount"] <- NONweekCount[which(NONweekCount$Var1 == i),"Freq"]
+            #week2week[counter,"NONatrisk"] <- seconddenom
+            #week2week[counter,"NONincidence"] <- week2week[counter,"NONSzcount"]/week2week[counter,"NONatrisk"]
+            #week2week[counter,"RateRatio"] <- week2week[counter,"DSTincidence"]/week2week[counter,"NONincidence"]
+            week2week[counter,"DSTSzcount"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]
+            week2week[counter,"DSTatrisk"] <- mean(firstweek[which(year(firstweek$datetime) == i),"AtRiskperWEEK"])
+            week2week[counter,"DSTincidence"] <- mean(firstweek[which(year(firstweek$datetime) == i),"scldIncidenceperWEEK"])
+            week2week[counter,"NONSzcount"] <- NONweekCount[which(NONweekCount$Var1 == i),"Freq"]
+            week2week[counter,"NONatrisk"] <- mean(secondweek[which(year(secondweek$datetime) == i),"AtRiskperWEEK"])
+            week2week[counter,"NONincidence"] <- mean(secondweek[which(year(secondweek$datetime) == i),"scldIncidenceperWEEK"])
+            week2week[counter,"RateRatio"] <- week2week[counter,"DSTincidence"]/week2week[counter,"NONincidence"]
+            counter=counter+1
+            
+        }
+        baselinerisk=rep(1,length(week2week$RateRatio)) #As DST is the reference, we're comparing to this
+        ###WAS NOT WEIGHTED###
+        #print(t.test(week2week$RateRatio,baselinerisk))
+        #print(cohen.d(week2week$RateRatio,baselinerisk))
+        #print(paste(wktwo,"rate ratios 2008-2016 mean:",round(mean(week2week$RateRatio),2)))
+        #print(paste(wktwo,"rate ratios 2008-2016 SD:",round(sd(week2week$RateRatio),2)))
+        #print(paste(wktwo,
+        #            "rate ratio conidence interval:",
+        #            round(mean(week2week$RateRatio)-1.96*sd(week2week$RateRatio)/sqrt(length(week2week$RateRatio)),2),
+        #            "to",
+        #            round(mean(week2week$RateRatio)+1.96*sd(week2week$RateRatio)/sqrt(length(week2week$RateRatio)),2)))
+        
+        ###WEIGHTED###
+        weightedT <- wtd.t.test(week2week$NONSzcount,week2week$DSTSzcount,week2week$NONatrisk,week2week$DSTatrisk)
+        week2weekstats[1, "epoch"] <- wktwo
+        week2weekstats[which(week2weekstats$epoch == wktwo),"FreqT"] <- weightedT$coefficients[[1]]
+        week2weekstats[which(week2weekstats$epoch == wktwo),"Freqdf"] <- weightedT$coefficients[[2]]
+        week2weekstats[which(week2weekstats$epoch == wktwo),"FreqP"] <- weightedT$coefficients[[3]]
+        print(weightedT)
+        CohenD <- cohen.d(week2week$NONSzcount,week2week$DSTSzcount)
+        week2weekstats[which(week2weekstats$epoch == wktwo),"Freqd"] <- CohenD$estimate[[1]]
+        print(CohenD)
+        week2weekstats[which(week2weekstats$epoch == wktwo),"COMPmean"] <- wt.mean(week2week$NONSzcount,week2week$NONatrisk)
+        print(paste("All",wktwo,"Sz counts 2008-2016 weighted mean:",round(wt.mean(week2week$NONSzcount,week2week$NONatrisk),2)))
+        week2weekstats[which(week2weekstats$epoch == wktwo),"COMPsd"] <- wt.sd(week2week$NONSzcount,week2week$NONatrisk)
+        print(paste("All",wktwo,"Sz counts 2008-2016 SD:",round(wt.sd(week2week$NONSzcount,week2week$NONatrisk),2)))
+        week2weekstats[which(week2weekstats$epoch == wktwo),"DSTmean"] <- wt.mean(week2week$DSTSzcount,week2week$DSTatrisk)
+        print(paste("All",wkone,"Sz counts 2008-2016 mean:",round(wt.mean(week2week$DSTSzcount,week2week$DSTatrisk),2)))
+        week2weekstats[which(week2weekstats$epoch == wktwo),"DSTsd"] <- wt.sd(week2week$DSTSzcount,week2week$DSTatrisk)
+        print(paste("All",wkone,"Sz counts 2008-2016 SD:",round(wt.sd(week2week$DSTSzcount,week2week$DSTatrisk),2)))
+        
+        weightedT <- wtd.t.test(week2week$RateRatio,baselinerisk,week2week$NONatrisk,week2week$DSTatrisk)
+        week2weekstats[which(week2weekstats$epoch == wktwo),"RRT"] <- weightedT$coefficients[[1]]
+        week2weekstats[which(week2weekstats$epoch == wktwo),"RRdf"] <- weightedT$coefficients[[2]]
+        week2weekstats[which(week2weekstats$epoch == wktwo),"RRP"] <- weightedT$coefficients[[3]]
+        print(weightedT)
+        CohenD <- cohen.d(week2week$RateRatio,baselinerisk)
+        week2weekstats[which(week2weekstats$epoch == wktwo),"RRd"] <- CohenD$estimate[[1]]
+        print(CohenD)
+        week2weekstats[which(week2weekstats$epoch == wktwo),"RateRatio"] <- wt.mean(week2week$RateRatio,week2week$NONatrisk)
+        print(paste("Mean of rate ratio of",wkone,"to",wktwo,":",wt.mean(week2week$RateRatio,week2week$NONatrisk)))
+        print(paste("SD of rate ratio of",wkone,"to",wktwo,":",wt.sd(week2week$RateRatio,week2week$NONatrisk)))
+        week2weekstats[which(week2weekstats$epoch == wktwo),"lCI"] <- wt.mean(week2week$RateRatio,week2week$NONatrisk)-1.96*wt.sd(week2week$RateRatio,week2week$NONatrisk)/sqrt(length(week2week$RateRatio))
+        week2weekstats[which(week2weekstats$epoch == wktwo),"uCI"] <- wt.mean(week2week$RateRatio,week2week$NONatrisk)+1.96*wt.sd(week2week$RateRatio,week2week$NONatrisk)/sqrt(length(week2week$RateRatio))
+        print(paste("95% CI of rate ratio of",wkone,"to",wktwo,":",
+                    round(wt.mean(week2week$RateRatio,week2week$NONatrisk)-1.96*wt.sd(week2week$RateRatio,week2week$NONatrisk)/sqrt(length(week2week$RateRatio)),2),
+                    "to",
+                    round(wt.mean(week2week$RateRatio,week2week$NONatrisk)+1.96*wt.sd(week2week$RateRatio,week2week$NONatrisk)/sqrt(length(week2week$RateRatio)),2)))
+        
+        write.table(week2weekstats,
+                    file = paste("week2week_fullweekSTATS_",wkone,"_",wktwo,".txt",sep=""),
+                    quote = F,
+                    row.names = F)
+        
+        write.table(week2week,
+                    file=paste("Seizure Rate Ratios for ",wkone," compared to ",wktwo,".txt",sep=""),
+                    quote = F,
+                    row.names = F)
+        week2week$Year <- as.factor(week2week$Year)
+        
+        #Now plot the rate ratios, by year
+        print(ggplot(week2week[,c("Year","RateRatio")], aes(x=Year, y=RateRatio)) + 
+            #IF WANT AS HISTOGRAM:
+            #geom_bar(position=position_dodge(), stat="identity",
+            #         colour="black", # Use black outlines,
+            #         size=.3) +      # Thinner lines
+            geom_point(size=5, color="turquoise4") + 
+            geom_hline(yintercept = mean(week2week$RateRatio)) + 
+            geom_hline(yintercept = c(mean(week2week$RateRatio)+1.96*sd(week2week$RateRatio),
+                                      mean(week2week$RateRatio)-1.96*sd(week2week$RateRatio)),
+                       linetype=3) + 
+            scale_y_continuous(limits = c(0.5,1.5)) + 
+            xlab("Year") +
+            ylab("Rate Ratio") +
+            ggtitle(paste(wkone,"vs",wktwo,"Rate Ratios from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
+            theme_bw())
+        png(paste(wkone," vs ",wktwo," Rate Ratios from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+            width = 9, 
+            height = 6, 
+            units = 'in', 
+            bg = "transparent", 
+            res = 300)
+        print(ggplot(week2week[,c("Year","RateRatio")], aes(x=Year, y=RateRatio)) + 
+            #IF WANT AS HISTOGRAM:
+            #geom_bar(position=position_dodge(), stat="identity",
+            #         colour="black", # Use black outlines,
+            #         size=.3) +      # Thinner lines
+            geom_point(size=5, color="turquoise4") + 
+            geom_hline(yintercept = mean(week2week$RateRatio)) + 
+            geom_hline(yintercept = c(mean(week2week$RateRatio)+1.96*sd(week2week$RateRatio),
+                                      mean(week2week$RateRatio)-1.96*sd(week2week$RateRatio)),
+                       linetype=3) + 
+            scale_y_continuous(limits = c(0.5,1.5)) + 
+            xlab("Year") +
+            ylab("Rate Ratio") +
+            ggtitle(paste(wkone,"vs",wktwo,"Rate Ratios from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
+            theme_bw())
+        dev.off()
+    }
+}
+```
+  
+Compare DST to non-DST  
+```{r DST to non-DST again, echo=FALSE}
+compareweeks(firstweek=Sz08to16wkofDST,
+             secondweek=Sz08to16notDST,
+             wkone="week of DST",
+             wktwo="all non DST")
+```
+  
+Compare DST to pre-DST  
+```{r DST to pre-DST again, echo=FALSE}
+compareweeks(firstweek=Sz08to16wkofDST,
+             secondweek=Sz08to16wkpreDST,
+             wkone="week of DST",
+             wktwo="preDST week")
+```
+  
+Compare DST to the week post-DST week  
+```{r DST to post-DST again, echo=FALSE}
+compareweeks(firstweek=Sz08to16wkofDST,
+             secondweek=Sz08to16wkpostDST,
+             wkone="week of DST",
+             wktwo="week after DST week")
+```
+  
+Compare DST to ST  
+```{r DST to ST again, echo=FALSE}
+compareweeks(firstweek=Sz08to16wkofDST,
+             secondweek=Sz08to16wkofST,
+             wkone="week of DST",
+             wktwo="ST start week")
+```
+
+  
+Compare ST to pre-ST  
+```{r DST to pre-ST again, echo=FALSE}
+compareweeks(firstweek=Sz08to16wkofST,
+             secondweek=Sz08to16wkpreST,
+             wkone="week of ST",
+             wktwo="preST week")
+```
+  
+Compare ST to the week post-ST week  
+```{r DST to post-ST again, echo=FALSE}
+compareweeks(firstweek=Sz08to16wkofST,
+             secondweek=Sz08to16wkpostST,
+             wkone="week of ST",
+             wktwo="week after ST week")
+```
+
+```{r scratchpad, eval=FALSE, echo=FALSE}
+###Prior compareweeks function (first function contents)###
     #Get seizure counts for each day of the week in DST
     #-this is tabulated BY DATE (i.e. all Sz on Sunday 2008-03-16)
     #-this allows for independent t-tests (albeit suboptimal compared to paired t-tests)
@@ -2419,7 +3375,6 @@ compareweekdays <- function(firstweek=Sz08to16wkofDST,
                             "Year"=numeric(),
                             "RateRatio"=numeric(),
                             stringsAsFactors = F)
-    list <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
     
     for(i in list) {
         weekdaydf <- grep(paste("^",substr(i,1,3),sep=""),NONnames,value=T,ignore.case=T)
@@ -2456,42 +3411,6 @@ compareweekdays <- function(firstweek=Sz08to16wkofDST,
                 row.names = F)
     
     #Now plot the rate ratios, by weekday
-    ggplot() + 
-        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
-        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
-                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
-                   linetype=3) + 
-        xlab("Weekday") +
-        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
-        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
-        theme_bw() + 
-        theme(legend.title = element_blank())
-    #The above demonstrates pretty extreme outliers (particularly in the first full year...possibly bias from high-documentation rates and low population counts)
-    # -Seems reasonable to remove those beyond 3 SD (particularly for the case of the whole-year-as-baseline comparisons)
-    week2week <- week2week[which(week2week$RateRatio > (mean(week2week$RateRatio)-3*sd(week2week$RateRatio)) & week2week$RateRatio < (mean(week2week$RateRatio)+3*sd(week2week$RateRatio))),]
-    
-    #Now plot the rate ratios again with extreme outliers removed
-    ggplot() + 
-        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
-        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
-                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
-                   linetype=3) + 
-        xlab("Weekday") +
-        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
-        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
-        theme_bw() + 
-        theme(legend.title = element_blank())
-    
-#    png(paste("Rate Ratios comparing ",wkone," and ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#        width = 9, 
-#        height = 6, 
-#        units = 'in', 
-#        bg = "transparent", 
-#        res = 300)
     print(ggplot() + 
         geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
         geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
@@ -2504,7 +3423,44 @@ compareweekdays <- function(firstweek=Sz08to16wkofDST,
         ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
         theme_bw() + 
         theme(legend.title = element_blank()))
-#    dev.off()
+    
+    #The above demonstrates pretty extreme outliers (particularly in the first full year...possibly bias from high-documentation rates and low population counts)
+    # -Seems reasonable to remove those beyond 3 SD (particularly for the case of the whole-year-as-baseline comparisons)
+    week2week <- week2week[which(week2week$RateRatio > (mean(week2week$RateRatio)-3*sd(week2week$RateRatio)) & week2week$RateRatio < (mean(week2week$RateRatio)+3*sd(week2week$RateRatio))),]
+    
+    #Now plot the rate ratios again with extreme outliers removed
+    print(ggplot() + 
+        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
+        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
+                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
+                   linetype=3) + 
+        xlab("Weekday") +
+        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
+        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
+        theme_bw() + 
+        theme(legend.title = element_blank()))
+    
+    png(paste("Rate Ratios comparing ",wkone," and ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
+    print(ggplot() + 
+        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
+        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
+        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
+        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
+                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
+                   linetype=3) + 
+        xlab("Weekday") +
+        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
+        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
+        theme_bw() + 
+        theme(legend.title = element_blank()))
+    dev.off()
     
     firstdf <- data.frame("Week"=character(),
                           "Weekday"=character(),
@@ -2560,12 +3516,12 @@ compareweekdays <- function(firstweek=Sz08to16wkofDST,
     #library(ggpubr)
     
     require(ggplot2)
-#    png(paste("Comparison between ",wkone," and ",wktwo,".png",sep=""), 
-#        width = 9, 
-#        height = 6, 
-#        units = 'in', 
-#        bg = "transparent", 
-#        res = 300)
+    png(paste("Comparison between ",wkone," and ",wktwo,".png",sep=""), 
+        width = 9, 
+        height = 6, 
+        units = 'in', 
+        bg = "transparent", 
+        res = 300)
     print(ggplot(comparedf, aes(x=Weekday, y=Mean_Sz_count, fill=Week)) + 
         geom_bar(position=position_dodge(), stat="identity",
                  colour="black", # Use black outlines,
@@ -2576,522 +3532,16 @@ compareweekdays <- function(firstweek=Sz08to16wkofDST,
                       width=.2,
                       position=position_dodge(.9)) +
         xlab("Weekday") +
-        ylab("Number of seizures (± SEM)") +
+        ylab("Number of seizures (\u00b1SEM)") +
         scale_fill_hue(name=paste(wkone,"vs",wktwo), # Legend label, use darker colors
                        breaks=c(wkone, wktwo),
                        labels=c(wkone, wktwo)) +
         ggtitle("Comparison of seizures on a given weekday") +
         scale_y_continuous(breaks=0:500*100) +
         theme_bw())
-#    dev.off()
+    dev.off()
     
     print(sigdf)
     write.table(sigdf,file=paste("T-tests between ",wkone," and ",wktwo,".txt",sep=""),quote = F,row.names = F)
-    
-    ###Could add Rate Ratio stuff here, based on denominator work from weekly comparisons
-}
-```
-  
-Compare DST to non-DST  
-```{r DST to non-DST, echo=FALSE}
-compareweekdays(firstweek=Sz08to16wkofDST,
-                secondweek=Sz08to16notDST,
-                wkone="week of DST",
-                wktwo="all non DST")
-```
-  
-Compare DST to pre-DST  
-```{r DST to pre-DST, echo=FALSE}
-compareweekdays(firstweek=Sz08to16wkofDST,
-                secondweek=Sz08to16wkpreDST,
-                wkone="week of DST",
-                wktwo="preDST week")
-```
-  
-Compare DST to the week post-DST week  
-```{r DST to post-DST, echo=FALSE}
-compareweekdays(firstweek=Sz08to16wkofDST,
-                secondweek=Sz08to16wkpostDST,
-                wkone="week of DST",
-                wktwo="week after DST week")
-```
-  
-Compare DST to ST  
-```{r DST to ST, echo=FALSE}
-compareweekdays(firstweek=Sz08to16wkofDST,
-                secondweek=Sz08to16wkofST,
-                wkone="week of DST",
-                wktwo="ST start week")
-```
-  
-Compare ST to pre-ST  
-```{r DST to pre-ST, echo=FALSE}
-compareweekdays(firstweek=Sz08to16wkofST,
-                secondweek=Sz08to16wkpreST,
-                wkone="week of ST",
-                wktwo="preST week")
-```
-  
-Compare ST to the week post-ST week  
-```{r DST to post-ST, echo=FALSE}
-compareweekdays(firstweek=Sz08to16wkofST,
-                secondweek=Sz08to16wkpostST,
-                wkone="week of ST",
-                wktwo="week after ST week")
-```
-  
-  
-Visual demonstration of seizure rates registered to the DST time period  
-```{r daily seizure rates graph, echo=FALSE}
-Sz4timeplot <- Sz08to16[,c("datetime","DSTday","STday")]
-Sz4timeplot$time0 <- yday(Sz08to16$datetime) - Sz08to16$DSTday
-summary(Sz4timeplot) #things are now registered to DST's Sunday as t=0
-Sz4timeplot$year <- year(Sz08to16$datetime)
-
-table(Sz4timeplot$time0) #Shows that the extreme tails are undersampled (due to variability in onset/offset of DST)...hence usage of SEM
-yearlist <- c(min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) #Bound years by the bounds of the dataset
-CountsByYear <- data.frame("Index"=seq(min(Sz4timeplot$time0),max(Sz4timeplot$time0),1))
-colID <- 2
-for(i in yearlist) {
-    yearlyCount <- Sz4timeplot[which(year(Sz4timeplot$datetime) == i),"time0"]
-    table(yearlyCount)
-    CountsByYear <- merge.data.frame(CountsByYear,as.data.frame(t(table(yearlyCount)))[,2:3],by.x="Index",by.y="yearlyCount",all.x = T)
-    names(CountsByYear)[colID] <- i
-    colID <- colID+1
-}
-fromcol <- grep(min(year(Sz08to16$datetime)), colnames(CountsByYear))
-tocol <- grep(max(year(Sz08to16$datetime)), colnames(CountsByYear))
-CountsByYear <- cbind(CountsByYear,
-                      Mean=apply(CountsByYear[,fromcol:tocol],1,mean,na.rm=T),
-                      SD=apply(CountsByYear[,fromcol:tocol],1,sd,na.rm=T))
-for(i in 1:nrow(CountsByYear)) {
-    CountsByYear[i,"SEM"] <- CountsByYear[i,"SD"]/sqrt(sum(!is.na(CountsByYear[i,fromcol:tocol])))
-}
-TallCount <- data.frame("Index"=numeric(),
-                        "SzCount"=numeric(),
-                        "Year"=numeric())
-for(i in yearlist) {
-    FORtall <- CountsByYear[,c("Index",i)]
-    names(FORtall)[2] <- "SzCount"
-    FORtall$Year <- i
-    TallCount <- rbind(TallCount,FORtall)
-}
-#CountsByYear$Mean <- rowMeans(CountsByYear[,fromcol:tocol], na.rm=T)
-#SDtemp <- transform(CountsByYear[,fromcol:tocol], SD=apply(CountsByYear[,fromcol:tocol],1,sd,na.rm=T))
-
-#png("Yearly trend.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-print(ggplot(CountsByYear, aes(x=Index,y=Mean)) + 
-    stat_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3) + #using loess smoothing with proportional smoothing from 7 out of 365 days
-    geom_vline(xintercept=c(0,7,237,244)) + 
-    annotate("rect", xmin=7, xmax=237, ymin=-Inf, ymax=Inf, alpha=0.2, fill="yellow") + 
-    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Day of the year (indexed to DST transition)") +
-    ylab("Seizure counts per day (mean ± SEM)") +
-    ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
-    theme_bw())
-#dev.off()
-
-ggplot(CountsByYear, aes(x=Index,y=Mean)) + 
-    stat_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3) + #using loess smoothing with proportional smoothing from 7 out of 365 days
-    geom_vline(xintercept=c(0,7,237,244)) + 
-    annotate("rect", xmin=7, xmax=237, ymin=-Inf, ymax=Inf, alpha=0.2, fill="yellow") + 
-    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Day of the year (indexed to DST transition)") +
-    ylab("Seizure counts per day (mean ± SEM)") +
-    ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
-    theme_bw()
-
-###May consider making CountsByYear a tall matrix and then coloring by year using methods from http://ggplot2.tidyverse.org/reference/geom_smooth.html
-#library(RColorBrewer)
-#png("Yearly trend_with points.png", 
-#    width = 9, 
-#    height = 6, 
-#    units = 'in', 
-#    bg = "transparent", 
-#    res = 300)
-print(ggplot(TallCount, aes(x=Index,y=SzCount,color=Year)) + 
-      geom_point() + 
-      #scale_x_continuous(breaks = c(cat(yearlist,sep=","))) + 
-      #scale_color_brewer(breaks = c(cat(paste(shQuote(yearlist,type="cmd"),collapse=","))),
-      #scale_color_brewer(breaks = c(cat(yearlist,sep=",")), palette="Set3") + #http://www.sthda.com/english/wiki/ggplot2-colors-how-to-change-colors-automatically-and-manually
-      geom_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3, colour="red") + 
-      geom_vline(xintercept=c(0,7,237,244)) + 
-      annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-      annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-      xlab("Day of the year (indexed to DST transition)") +
-      ylab("Seizure counts per day (mean ± SEM)") +
-      ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) + 
-      ylim(0,quantile(TallCount$SzCount, 0.99, na.rm=T)[[1]]) + 
-      theme_bw())
-#dev.off()
-
-ggplot(TallCount, aes(x=Index,y=SzCount,color=Year)) + 
-    geom_point() + 
-    #scale_x_continuous(breaks = c(cat(yearlist,sep=","))) + 
-    #scale_color_brewer(breaks = c(cat(paste(shQuote(yearlist,type="cmd"),collapse=","))),
-    #scale_color_brewer(breaks = c(cat(yearlist,sep=",")), palette="Set3") + #http://www.sthda.com/english/wiki/ggplot2-colors-how-to-change-colors-automatically-and-manually
-    geom_smooth(method="loess", span=7/365, se=TRUE, alpha=0.3, colour="red") + 
-    geom_vline(xintercept=c(0,7,237,244)) + 
-    annotate("rect", xmin=0, xmax=7, ymin=-Inf, ymax=Inf, alpha=0.2, fill="red") + 
-    annotate("rect", xmin=237, xmax=244, ymin=-Inf, ymax=Inf, alpha=0.2, fill="green") + 
-    xlab("Day of the year (indexed to DST transition)") +
-    ylab("Seizure counts per day (mean ± SEM)") +
-    ggtitle(paste("Yearly seizure trends over the period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) + 
-    ylim(0,quantile(TallCount$SzCount, 0.99, na.rm=T)[[1]]) + 
-    theme_bw()
-```
-  
-Weekly comparisons  
-```{r weekly comparisons}
-#Find out what week DST is in, register to that then calculate
-#If wanting to do comparison to the every-non-DST-week baseline, then second week must be Sz08to16nonDST/"all non DST"
-compareweeks <- function(firstweek=Sz08to16wkofDST,
-                         secondweek=Sz08to16notDST,
-                         wkone="week of DST",
-                         wktwo="all non DST") {
-    
-    #Get seizure counts for the week in DST
-    #-this allows for independent t-tests (albeit suboptimal compared to paired t-tests)
-    DSTweekCount <- as.data.frame(table(year(firstweek$datetime)))
-    
-    if(identical(secondweek,Sz08to16notDST)) { #For the all-non-DST-weeks-as-baseline comparison
-        #Get seizure counts for week(s) not in DST
-        NONweekdf <- secondweek[,c("datetime","weeknum","DSTweek")]
-        NONweekdf <- NONweekdf[-which(NONweekdf$weeknum == NONweekdf$DSTweek),] #ensures no DST-week counts are included
-        NONweekdf$year <- year(NONweekdf$datetime)
-        table(NONweekdf$weeknum,NONweekdf$year)
-        NONweekCount <- as.data.frame(table(NONweekdf$weeknum,NONweekdf$year))
-        NONweekCount[NONweekCount == 0] <- NA #replace non-existing weeks (e.g. year without the 53rd week, DST)
-        
-        #T-tests (x is for week of DST, y is for comparison week(s)):
-        print(t.test(DSTweekCount$Freq,NONweekCount$Freq))
-    
-        NON4gg <- NONweekCount[,2:3]
-        names(NON4gg) <- c("Year","Freq")
-        NON4gg$Year <- as.factor(NON4gg$Year)
-        DST4gg <- DSTweekCount
-        names(DST4gg) <- c("Year","Freq")
-        DST4gg$Year <- as.factor(DST4gg$Year)
-        
-        #Plot it
-        ggplot() + 
-            geom_jitter(data=NON4gg, aes(x=Year,y=Freq), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
-            geom_boxplot(data=NON4gg, aes(x=Year,y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
-            geom_point(data=DST4gg, aes(x=Year,y=Freq), color="red", size=4, shape=18) + 
-            xlab("Year") +
-            ylab("Seizure Counts (per week)") +
-            ggtitle(paste("Percentile for ",wkone," seizure counts, per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
-            theme_bw()
-        
-#        png(paste("Percentile for ",wkone," seizure counts, per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#            width = 9, 
-#            height = 6, 
-#            units = 'in', 
-#            bg = "transparent", 
-#            res = 300)
-        print(ggplot() + 
-            geom_jitter(data=NON4gg, aes(x=Year,y=Freq), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
-            geom_boxplot(data=NON4gg, aes(x=Year,y=Freq), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
-            geom_point(data=DST4gg, aes(x=Year,y=Freq), color="red", size=4, shape=18) + 
-            xlab("Year") +
-            ylab("Seizure Counts (per week)") +
-            ggtitle(paste("Percentile for ",wkone," seizure counts, per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
-            theme_bw())
-#        dev.off()
-        
-        #Make Z-score comparison
-        Zweek <- data.frame("Year"=numeric(),
-                            "PopMean"=numeric(),
-                            "PopSD"=numeric(),
-                            "SzCount"=numeric(),
-                            "Zscore"=numeric(),
-                            "Percentile"=numeric())
-        counter=1
-        for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
-            Zweek[counter,"Year"] <- i
-            Zweek[counter,"PopMean"] <- mean(na.omit(NONweekCount[which(NONweekCount$Var2 == i),"Freq"]))
-            Zweek[counter,"PopSD"] <- sd(na.omit(NONweekCount[which(NONweekCount$Var2 == i),"Freq"]))
-            Zweek[counter,"SzCount"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]
-            Zweek[counter,"Zscore"] <- (Zweek[counter,"SzCount"]-Zweek[counter,"PopMean"])/Zweek[counter,"PopSD"]
-            Zweek[counter,"Percentile"] <- round(pnorm(Zweek[counter,"Zscore"])*100,2)
-            counter=counter+1
-        }
-        write.table(Zweek,
-                    file = paste("Yearly percentiles by week ",wkone,".txt",sep=""),
-                    quote = F,
-                    row.names = F)
-        Zweek$Year <- as.factor(Zweek$Year)
-        #library(ggplot2)
-
-        ggplot(Zweek[,c("Year","Percentile")], aes(x=Year, y=Percentile)) + 
-            geom_bar(position=position_dodge(), stat="identity",
-                     colour="black", # Use black outlines,
-                     size=.3) +      # Thinner lines
-            geom_hline(yintercept = mean(Zweek$Percentile)) + 
-            geom_hline(yintercept = c(mean(Zweek$Percentile)+sd(Zweek$Percentile),
-                                      mean(Zweek$Percentile)-sd(Zweek$Percentile)),
-                       linetype=3) + 
-            xlab("Year") +
-            ylab("Percentile") +
-            ggtitle(paste("Percentile of seizure counts for ",wkone," per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) +
-            scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
-            theme_bw()
-#        png(paste("Percentile of seizure counts for ",wkone," per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#            width = 9, 
-#            height = 6, 
-#            units = 'in', 
-#            bg = "transparent", 
-#            res = 300)
-        print(ggplot(Zweek[,c("Year","Percentile")], aes(x=Year, y=Percentile)) + 
-            geom_bar(position=position_dodge(), stat="identity",
-                     colour="black", # Use black outlines,
-                     size=.3) +      # Thinner lines
-            geom_hline(yintercept = mean(Zweek$Percentile)) + 
-            geom_hline(yintercept = c(mean(Zweek$Percentile)+sd(Zweek$Percentile),
-                                      mean(Zweek$Percentile)-sd(Zweek$Percentile)),
-                       linetype=3) + 
-            xlab("Year") +
-            ylab("Percentile") +
-            ggtitle(paste("Percentile of seizure counts for ",wkone," per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) +
-            scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
-            theme_bw())
-#        dev.off()
-        
-        for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
-            #Subsetting for the year of interest
-            thisyear <- Sz08to16[which(year(Sz08to16$datetime) == i),]
-            firstyear <- firstweek[which(year(firstweek$datetime) == i),]
-            secondyear <- secondweek[which(year(secondweek$datetime) == i),]
-            
-            #Try using denominator estimated by number of individuals recording through the end of the period of interest
-            firstdenomdf <- Sz08to16[which(Sz08to16$datetime <= as.Date(max(firstyear$datetime),'America/Los_Angeles')),"Unlinked_ID"]
-            firstdenom <- length(unique(firstdenomdf))
-            baselineweeklist <- na.omit(NONweekCount[which(NONweekCount$Var2 == i),"Var1"])
-            
-            #Have to do this for each week in the baseline (NON DST) period
-            for (j in baselineweeklist) {
-                weeksend <- max(as.Date(secondyear[which(week(secondyear$datetime) == as.numeric(j)),"datetime"],'America/Los_Angeles'))
-                seconddenomdf <- Sz08to16[which(as.Date(Sz08to16$datetime,'America/Los_Angeles') <= weeksend),"Unlinked_ID"]
-                seconddenom <- length(unique(seconddenomdf))
-                NONweekCount[which(NONweekCount$Var1 == as.numeric(j) & NONweekCount$Var2 == i),"AtRisk"] <- seconddenom
-                NONweekCount[which(NONweekCount$Var1 == as.numeric(j) & NONweekCount$Var2 == i),"Incidence"] <- NONweekCount[which(NONweekCount$Var1 == as.numeric(j) & NONweekCount$Var2 == i),"Freq"]/seconddenom
-            }
-            NONweekCount[which(NONweekCount$Var2 == i),"DSTFreq"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]
-            NONweekCount[which(NONweekCount$Var2 == i),"DSTAtRisk"] <- firstdenom
-            NONweekCount[which(NONweekCount$Var2 == i),"DSTIncidence"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]/firstdenom
-            NONweekCount$RateRatio <- NONweekCount$DSTIncidence/NONweekCount$Incidence
-            
-        }
-        
-        ggplot() + 
-            geom_jitter(data=NONweekCount, aes(x=Var2,y=RateRatio), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
-            geom_boxplot(data=NONweekCount, aes(x=Var2,y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
-            xlab("Year") +
-            ylab(paste("Rate Ratios (",wkone," vs each week of the year)",sep="")) +
-            ggtitle(paste("Comparison of weekly seizure Rate Ratios for",wkone,min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)),sep=" ")) + 
-            geom_hline(yintercept = mean(NONweekCount$RateRatio,na.rm=T)) + 
-            geom_hline(yintercept = c(mean(NONweekCount$RateRatio,na.rm=T)+1.96*sd(NONweekCount$RateRatio,na.rm=T),
-                                      mean(NONweekCount$RateRatio,na.rm=T)-1.96*sd(NONweekCount$RateRatio,na.rm=T)),
-                       linetype=3) + 
-            ylim((mean(NONweekCount$RateRatio,na.rm=T)-2*sd(NONweekCount$RateRatio,na.rm=T)),(mean(NONweekCount$RateRatio,na.rm=T)+2*sd(NONweekCount$RateRatio,na.rm=T))) + 
-            theme_bw()
-        
-        #Those outliers look quite spurious, so cutting them out at the >3SD threshold and comparing again
-        NONweek4gg <- NONweekCount[which(NONweekCount$RateRatio < (mean(NONweekCount$RateRatio,na.rm=T)+3*sd(NONweekCount$RateRatio,na.rm=T)) & NONweekCount$RateRatio > (mean(NONweekCount$RateRatio,na.rm=T)-3*sd(NONweekCount$RateRatio,na.rm=T))),]
-        
-        ggplot() + 
-            geom_jitter(data=NONweek4gg, aes(x=Var2,y=RateRatio), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
-            geom_boxplot(data=NONweek4gg, aes(x=Var2,y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
-            xlab("Year") +
-            ylab(paste("Rate Ratios (",wkone," vs each week of the year)",sep="")) +
-            ggtitle(paste("Comparison of weekly seizure Rate Ratios for",wkone,min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)),sep=" ")) + 
-            geom_hline(yintercept = mean(NONweek4gg$RateRatio,na.rm=T)) + 
-            geom_hline(yintercept = c(mean(NONweek4gg$RateRatio,na.rm=T)+1.96*sd(NONweek4gg$RateRatio,na.rm=T),
-                                      mean(NONweek4gg$RateRatio,na.rm=T)-1.96*sd(NONweek4gg$RateRatio,na.rm=T)),
-                       linetype=3) + 
-            theme_bw()
-#        png(paste("Comparison of weekly seizure Rate Ratios for ",wkone," from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#            width = 9, 
-#            height = 6, 
-#            units = 'in', 
-#            bg = "transparent", 
-#            res = 300)
-        print(ggplot() + 
-            geom_jitter(data=NONweek4gg, aes(x=Var2,y=RateRatio), position=position_jitter(width=0.05), alpha=0.8) + #Outliers from incomplete weeks
-            geom_boxplot(data=NONweek4gg, aes(x=Var2,y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Outliers from incomplete weeks
-            xlab("Year") +
-            ylab(paste("Rate Ratios (",wkone," vs each week of the year)",sep="")) +
-            ggtitle(paste("Comparison of weekly seizure Rate Ratios for",wkone,min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)),sep=" ")) + 
-            geom_hline(yintercept = mean(NONweek4gg$RateRatio,na.rm=T)) + 
-            geom_hline(yintercept = c(mean(NONweek4gg$RateRatio,na.rm=T)+1.96*sd(NONweek4gg$RateRatio,na.rm=T),
-                                      mean(NONweek4gg$RateRatio,na.rm=T)-1.96*sd(NONweek4gg$RateRatio,na.rm=T)),
-                       linetype=3) + 
-            theme_bw())
-#        dev.off()
-        
-        names(NONweekCount) <- c("WeekOfYear","Year","Freq","AtRisk","Incidence","DSTFreq","DSTAtRisk","DSTIncidence","RiskRatio")
-        write.table(NONweekCount,
-                    file="Rate Ratios for each week.txt",
-                    quote = F,
-                    row.names = F)
-        
-        
-    } else { #For the single-week-as-baseline comparisons
-        #Get seizure counts for weeks not in DST
-        NONweekCount <- as.data.frame(table(year(secondweek$datetime)))
-        
-        #T-tests (x is for week of DST, y is for comparison week(s)):
-        print(t.test(DSTweekCount$Freq,NONweekCount$Freq))
-        print(cohen.d(DSTweekCount$Freq,NONweekCount$Freq))
-        print(paste(wkone,"Sz counts 2008-2016 mean:",round(mean(DSTweekCount$Freq),2)))
-        print(paste(wkone,"Sz counts 2008-2016 SD:",round(sd(DSTweekCount$Freq),2)))
-        print(paste(wktwo,"Sz counts 2008-2016 mean:",round(mean(NONweekCount$Freq),2)))
-        print(paste(wktwo,"Sz counts 2008-2016 SD:",round(sd(NONweekCount$Freq),2)))
-        
-        week2week <- data.frame("Year"=numeric(),
-                                "DSTSzcount"=numeric(),
-                                "DSTatrisk"=numeric(),
-                                "DSTincidence"=numeric(),
-                                "NONSzcount"=numeric(),
-                                "NONatrisk"=numeric(),
-                                "NONincidence"=numeric(),
-                                "RateRatio"=numeric())
-        counter=1
-        for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
-            #Subsetting for the year of interest
-            thisyear <- Sz08to16[which(year(Sz08to16$datetime) == i),]
-            firstyear <- firstweek[which(year(firstweek$datetime) == i),]
-            secondyear <- secondweek[which(year(secondweek$datetime) == i),]
-            
-            #Try using denominator estimated by number of individuals recording through the end of the period of interest
-            firstdenomdf <- Sz08to16[which(Sz08to16$datetime <= as.Date(max(firstyear$datetime),'America/Los_Angeles')),"Unlinked_ID"]
-            firstdenom <- length(unique(firstdenomdf))
-            seconddenomdf <- Sz08to16[which(Sz08to16$datetime <= as.Date(max(secondyear$datetime),'America/Los_Angeles')),"Unlinked_ID"]
-            seconddenom <- length(unique(seconddenomdf))
-            print(paste("Rough estimate of difference in 'at risk' individuals: ",abs(firstdenom-seconddenom),"; with ",firstdenom," accumulated individuals by DST week of ",i,sep=""))
-            
-            week2week[counter,"Year"] <- i
-            week2week[counter,"DSTSzcount"] <- DSTweekCount[which(DSTweekCount$Var1 == i),"Freq"]
-            week2week[counter,"DSTatrisk"] <- firstdenom
-            week2week[counter,"DSTincidence"] <- week2week[counter,"DSTSzcount"]/week2week[counter,"DSTatrisk"]
-            week2week[counter,"NONSzcount"] <- NONweekCount[which(NONweekCount$Var1 == i),"Freq"]
-            week2week[counter,"NONatrisk"] <- seconddenom
-            week2week[counter,"NONincidence"] <- week2week[counter,"NONSzcount"]/week2week[counter,"NONatrisk"]
-            week2week[counter,"RateRatio"] <- week2week[counter,"DSTincidence"]/week2week[counter,"NONincidence"]
-            counter=counter+1
-            
-        }
-        DSTbaseline=rep(1,length(week2week$RateRatio)) #As DST is the reference, we're comparing to this
-        print(t.test(week2week$RateRatio,DSTbaseline))
-        print(cohen.d(week2week$RateRatio,DSTbaseline))
-        print(paste(wktwo,"rate ratios 2008-2016 mean:",round(mean(week2week$RateRatio),2)))
-        print(paste(wktwo,"rate ratios 2008-2016 SD:",round(sd(week2week$RateRatio),2)))
-        print(paste(wktwo,
-                    "rate ratio conidence interval:",
-                    round(mean(week2week$RateRatio)-1.96*sd(week2week$RateRatio)/sqrt(length(week2week$RateRatio)),2),
-                    "to",
-                    round(mean(week2week$RateRatio)+1.96*sd(week2week$RateRatio)/sqrt(length(week2week$RateRatio)),2)))
-        
-        write.table(week2week,
-                    file=paste("Seizure Rate Ratios for ",wkone," compared to ",wktwo,".txt",sep=""),
-                    quote = F,
-                    row.names = F)
-        week2week$Year <- as.factor(week2week$Year)
-        
-        #Now plot the rate ratios, by year
-        ggplot(week2week[,c("Year","RateRatio")], aes(x=Year, y=RateRatio)) + 
-            #IF WANT AS HISTOGRAM:
-            #geom_bar(position=position_dodge(), stat="identity",
-            #         colour="black", # Use black outlines,
-            #         size=.3) +      # Thinner lines
-            geom_point(size=5, color="turquoise4") + 
-            geom_hline(yintercept = mean(week2week$RateRatio)) + 
-            geom_hline(yintercept = c(mean(week2week$RateRatio)+1.96*sd(week2week$RateRatio),
-                                      mean(week2week$RateRatio)-1.96*sd(week2week$RateRatio)),
-                       linetype=3) + 
-            scale_y_continuous(limits = c(0.5,1.5)) + 
-            xlab("Year") +
-            ylab("Rate Ratio") +
-            ggtitle(paste(wkone,"vs",wktwo,"Rate Ratios from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
-            theme_bw()
-#        png(paste(wkone," vs ",wktwo," Rate Ratios from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-#            width = 9, 
-#            height = 6, 
-#            units = 'in', 
-#            bg = "transparent", 
-#            res = 300)
-        print(ggplot(week2week[,c("Year","RateRatio")], aes(x=Year, y=RateRatio)) + 
-            #IF WANT AS HISTOGRAM:
-            #geom_bar(position=position_dodge(), stat="identity",
-            #         colour="black", # Use black outlines,
-            #         size=.3) +      # Thinner lines
-            geom_point(size=5, color="turquoise4") + 
-            geom_hline(yintercept = mean(week2week$RateRatio)) + 
-            geom_hline(yintercept = c(mean(week2week$RateRatio)+1.96*sd(week2week$RateRatio),
-                                      mean(week2week$RateRatio)-1.96*sd(week2week$RateRatio)),
-                       linetype=3) + 
-            scale_y_continuous(limits = c(0.5,1.5)) + 
-            xlab("Year") +
-            ylab("Rate Ratio") +
-            ggtitle(paste(wkone,"vs",wktwo,"Rate Ratios from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
-            theme_bw())
-#        dev.off()
-    }
-}
-```
-  
-Compare DST to non-DST  
-```{r DST to non-DST again, echo=FALSE}
-compareweeks(firstweek=Sz08to16wkofDST,
-             secondweek=Sz08to16notDST,
-             wkone="week of DST",
-             wktwo="all non DST")
-```
-  
-Compare DST to pre-DST  
-```{r DST to pre-DST again, echo=FALSE}
-compareweeks(firstweek=Sz08to16wkofDST,
-             secondweek=Sz08to16wkpreDST,
-             wkone="week of DST",
-             wktwo="preDST week")
-```
-  
-Compare DST to the week post-DST week  
-```{r DST to post-DST again, echo=FALSE}
-compareweeks(firstweek=Sz08to16wkofDST,
-             secondweek=Sz08to16wkpostDST,
-             wkone="week of DST",
-             wktwo="week after DST week")
-```
-  
-Compare DST to ST  
-```{r DST to ST again, echo=FALSE}
-compareweeks(firstweek=Sz08to16wkofDST,
-             secondweek=Sz08to16wkofST,
-             wkone="week of DST",
-             wktwo="ST start week")
-```
-
-  
-Compare ST to pre-ST  
-```{r DST to pre-ST again, echo=FALSE}
-compareweeks(firstweek=Sz08to16wkofST,
-             secondweek=Sz08to16wkpreST,
-             wkone="week of ST",
-             wktwo="preST week")
-```
-  
-Compare ST to the week post-ST week  
-```{r DST to post-ST again, echo=FALSE}
-compareweeks(firstweek=Sz08to16wkofST,
-             secondweek=Sz08to16wkpostST,
-             wkone="week of ST",
-             wktwo="week after ST week")
+###Prior compareweeks function (first function contents)###
 ```
