@@ -1,0 +1,946 @@
+---
+title: "DTSanalreviewer.Rmd"
+author: "Logan Schneider"
+date: "1/26/2019"
+output: html_document
+---
+
+    ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown  
+```{r FYI, echo=FALSE}
+#print("Analyses perfomed using:")
+#R.Version()$version.string
+print("lubridate, zoo, ggplot2, RColorBrewer, car, agricolae, scales, effsize, weights, SDMTools, astsa, lme4, rstanarm, MASS, broom, MuMIn")
+library(lubridate)
+library(zoo)
+library(ggplot2)
+library(RColorBrewer)
+library(car)
+library(agricolae)
+library(scales)
+library(effsize) #for effect size estimates
+library(weights) #for weighted stats
+library(SDMTools) #for weighted stats
+library(astsa)
+library(lme4)
+library(rstanarm)
+library(MASS)
+library(broom)
+library(MuMIn)
+print("Please use the following citation information")
+citation()
+
+sessionInfo()
+```
+  
+Data loading  
+#perform after DSTclean.Rmd preprocessing complete  
+#=====================================#
+```{r Data loading}
+#to read in the saved csv files:
+Sz08to16 <- read.csv("Sz08to16wInc&RelRates.csv", stringsAsFactors = F)
+Sz08to16 <- Sz08to16[,-1]
+Sz08to16$datetime <- as.POSIXct(Sz08to16$datetime) ###TO DO, check to see if need to read in as tz='America/Los_Angeles' or read in as tz="GMT"
+print(paste("After cleaning, there remain",
+            length(unique(Sz08to16$Unlinked_ID)),
+            "individuals and",
+            nrow(Sz08to16),
+            "seizures."))
+
+#Are the DST onset days correctly identified?
+table(as.Date(Sz08to16[which(Sz08to16$DSTonday == 0),"datetime"])) #Yes
+
+Day08to16 <- read.csv("DAY08to16wInc&RelRates.csv", stringsAsFactors = F)
+Day08to16 <- Day08to16[,-1]
+Day08to16$datetime <- as.POSIXct(Day08to16$datetime)
+
+Night08to16 <- read.csv("NIGHT08to16wInc&RelRates.csv", stringsAsFactors = F)
+Night08to16 <- Night08to16[,-1]
+Night08to16$datetime <- as.POSIXct(Night08to16$datetime)
+```
+  
+Bring in covariates  
+```{r bring in covariates}
+covs <- read.csv("STFullExportMignot_20170317.csv_Profiles.txt",stringsAsFactors = F)
+covs$DoB <- as.Date(covs$Birth_Date, "%Y-%m-%d")
+covs$m1f0[covs$Gender == "M"] <- 1
+covs$m1f0[covs$Gender == "F"] <- 0
+#Check: na.omit(covs[,c("Gender","m1f0")])
+covs$focal <- ifelse(covs$Brain_Tumors == "Brain Tumors" | 
+                         covs$Brain_Trauma == "Brain Trauma" | 
+                         covs$Brain_Trauma_Hematomas == "Yes" | 
+                         covs$Stroke == "Stroke" | 
+                         covs$Brain_Surgery == "Brain Surgery" | 
+                         covs$Brain_Malformations == "Brain Malformations" | 
+                         covs$Congenital_Condition == "Tuberous Sclerosis",
+                     1, 0)
+covs$gen <- ifelse(covs$focal != 1 & (covs$Alzheimers == "Alzheimers" | 
+                                          covs$Genetic_Abnormalities == "Genetic Abnormalities" | 
+                                          covs$Electrolyte_Disturbances == "Electrolyte Disturbances" | 
+                                          covs$Alcohol_Or_Drug_Abuse == "Alcohol or drug abuse" | 
+                                          covs$Congenital_Condition == "Dravet Syndrome" | 
+                                          covs$Congenital_Condition == "Angelman's Syndrome" | 
+                                          covs$Congenital_Condition == "Neurofibromatosis" | 
+                                          covs$Congenital_Condition == "Down's Syndrome" | 
+                                          covs$Congenital_Condition == "Aicardi Syndrome" | 
+                                          covs$Congenital_Condition == "Sturge-Weber Syndrome" | 
+                                          covs$Congenital_Condition == "Rett Syndrome" | 
+                                          covs$Congenital_Condition == "Hypothalamic Hamartoma"),
+                   1, 0)
+```
+  
+Data imaging and analysis 
+#====================================#  
+```{r yearly data summaries}
+#examine by year; source method: http://stackoverflow.com/questions/2127926/how-do-i-highlight-an-observations-bin-in-a-histogram-in-r
+highlight <- function(x, value1, value2, col.value1, col.value2, col=NA, ...){
+    hst <- hist(x, ...)
+    idx1 <- findInterval(value1, hst$breaks)
+    idx2 <- findInterval(value2, hst$breaks)
+    cols <- rep(col, length(hst$counts))
+    cols[idx1] <- col.value1
+    cols[idx2] <- col.value2
+    hist(x, col=cols, ...)
+}
+
+ordered <- Sz08to16[with(Sz08to16, order(Unlinked_ID, datetime)), ]
+#weeks are funny at the start and end of the year with partial weeks, so remove them
+orderednotails <- ordered[which(epiweek(ordered$datetime) > 1 & epiweek(ordered$datetime) < 52),"datetime"]
+summary(epiweek(orderednotails))
+
+for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+    DSTon <- as.Date(ymd(paste(i,3,01,sep="-")))
+    DSTon <- as.Date(ifelse(wday(DSTon)==1,DSTon+7,DSTon+(15-wday(DSTon))))
+    DSToff <- as.Date(ymd(paste(i,11,01,sep="-")))
+    DSToff <- as.Date(ifelse(wday(DSToff)==1,DSToff,DSToff+(8-wday(DSToff))))
+    #Szwks <- epiweek(ordered[which(year(ordered$datetime)==i),"datetime"])
+    #highlight(Szwks,epiweek(DSTon),epiweek(DSToff),"red","blue",breaks=week(as.POSIXct(paste(i,12,31,sep="-"))),main=paste("Histogram of seizure counts for ",i,sep=""))
+    Szwks <- epiweek(orderednotails[which(year(orderednotails)==i)])
+    highlight(Szwks,
+              epiweek(DSTon),
+              epiweek(DSToff),
+              "red",
+              "blue",
+              breaks=51,
+              main=paste("Histogram of seizure counts for ",i,sep=""))
+}
+
+#plot aggregate data from complete years: 2008-2016
+#-normalize week of DST transition to 0
+#Szwks<-epiweek(Sz08to16[,"datetime"])-Sz08to16[,"DSTweek"]
+Szwks<-epiweek(Sz08to16[which(epiweek(Sz08to16$datetime) > 1 & epiweek(Sz08to16$datetime) < 52),"datetime"])-Sz08to16[which(epiweek(Sz08to16$datetime) > 1 & epiweek(Sz08to16$datetime) < 52),"DSTweek"]
+#-plot with highlights
+#highlight(Szwks,0,34,"red","blue",breaks=53,main="Histogram of seizure counts for Jan 2008-Dec 2016")
+highlight(Szwks,0,34,"red","blue",breaks=51,main="Histogram of seizure counts for Jan 2008-Dec 2016")
+```
+  
+Subsetting datasets for DST and baseline time windows  
+```{r data subsetting}
+#Make relevant dataframes for comparison:
+#-the week of DST (DSTonday 0-6: Sun-Sat)
+Sz08to16wkofDST <- Sz08to16[which(Sz08to16$DSTonday >= 0 & Sz08to16$DSTonday < 7),] #only includes DST-week days
+#Sz08to16wkofDST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$DSTweek),] 
+summary(Sz08to16wkofDST$DSTonday)
+wkofDST <- table(Sz08to16wkofDST$wkday)
+recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
+barplot(wkofDST[recombobulate])
+str(Sz08to16wkofDST$DSTonday)
+#-the week before DST (a control time period)
+Sz08to16wkpreDST <- Sz08to16[which((yday(Sz08to16$datetime) >= Sz08to16$DSTday-7 ) & (yday(Sz08to16$datetime) < Sz08to16$DSTday-0 ) ),] #only includes days in week before DST
+#Sz08to16wkpreDST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$DSTweek-1),] 
+summary(yday(Sz08to16wkpreDST$datetime))
+summary(Sz08to16$DSTday)
+wkpreDST <- table(Sz08to16wkpreDST$wkday)
+recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
+barplot(wkpreDST[recombobulate])
+str(yday(Sz08to16wkpreDST$datetime))
+#-the week following DST week (a control time period)
+Sz08to16wkpostDST <- Sz08to16[which(Sz08to16$DSTonday >= 7 & Sz08to16$DSTonday < 14),] #only includes days in week following DST week
+#Sz08to16wkpostDST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$DSTweek+1),] 
+summary(yday(Sz08to16wkpostDST$datetime))
+summary(Sz08to16$DSTday)
+wkpostDST <- table(Sz08to16wkpostDST$wkday)
+recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
+barplot(wkpostDST[recombobulate])
+str(yday(Sz08to16wkpostDST$datetime))
+#-the week of ST (STonday 0-6: Sun-Sat) (a control time period, or primary time period)
+Sz08to16wkofST <- Sz08to16[which(Sz08to16$DSToffday >= 0 & Sz08to16$DSToffday < 7),] #only includes ST-week days
+#Sz08to16wkofST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$STweek),] 
+summary(Sz08to16wkofST$DSToffday)
+wkofST <- table(Sz08to16wkofST$wkday)
+recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
+barplot(wkofST[recombobulate])
+str(Sz08to16wkofST$DSToffday)
+#-the week before ST (a control time period)
+Sz08to16wkpreST <- Sz08to16[which(Sz08to16$DSTonday > 231 & Sz08to16$DSTonday <= 238),] #only includes days in week before ST week
+#Sz08to16wkpreST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$STweek-1),] 
+summary(yday(Sz08to16wkpreST$datetime))
+summary(Sz08to16$STday)
+wkpreST <- table(Sz08to16wkpreST$wkday)
+recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
+barplot(wkpreST[recombobulate])
+str(yday(Sz08to16wkpreST$datetime))
+#-the week following ST week (a control time period)
+Sz08to16wkpostST <- Sz08to16[which(Sz08to16$DSToffday >= 7 & Sz08to16$DSToffday < 14),] #only includes days in week following ST week
+#Sz08to16wkpostST <- Sz08to16[which(epiweek(Sz08to16$datetime) == Sz08to16$STweek+1),] 
+summary(yday(Sz08to16wkpostST$datetime))
+summary(Sz08to16$STday)
+wkpostST <- table(Sz08to16wkpostST$wkday)
+recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
+barplot(wkpostST[recombobulate])
+str(yday(Sz08to16wkpostST$datetime))
+#-NOT week of DST (a control time period)
+Sz08to16notDST <- Sz08to16[which(Sz08to16$DSTonday >= 7 | Sz08to16$DSToffday >=0),] #includes all non-DST-week days and all ST days
+#Sz08to16notDST <- Sz08to16wkofDST <- Sz08to16[which(epiweek(Sz08to16$datetime) != Sz08to16$DSTweek),] 
+summary(yday(Sz08to16notDST$datetime))
+notDST <- table(Sz08to16notDST$wkday)
+recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering default of table
+barplot(notDST[recombobulate])
+str(yday(Sz08to16notDST$datetime))
+```
+  
+###Reviewer requested models
+```{r create merged data frame for reviewer models}
+#Sz4merge <- Sz08to16[which(Sz08to16$weeknum > 1 & Sz08to16$weeknum < 52),]
+Sz4merge <- Sz08to16[,c("Unlinked_ID","datetime","ScaledSzCount","DSTday")]
+Sz4merge$RelativeDay <- yday(Sz4merge$datetime) - Sz4merge$DSTday #Get day relative to DST transition
+Sz4merge$ScaledSzBinary <- ifelse(Sz4merge$ScaledSzCount > 0,1,0) #Binary outcome for logistic model
+
+covs4merge <- covs[,c("Unlinked_ID","DoB","m1f0","focal","gen")]
+
+ModelMerge <- merge.data.frame(Sz4merge,covs4merge,sort=F)
+#Calculate age at time of seizure documentation
+ModelMerge$age <- as.numeric(difftime(as.Date(ModelMerge$datetime), ModelMerge$DoB, unit="weeks"))/52.25
+#check on those ages
+summary(ModelMerge$age)
+#...obviously there are some errors there so remove unrealistic ages (i.e. only 0-90 y/o)
+ModelMerge <- ModelMerge[which(ModelMerge$age > 0 & ModelMerge$age <= 90),]
+summary(ModelMerge$age) #that makes more sense
+
+ModelMerge$Year <- year(ModelMerge$datetime)
+ModelMerge$Weekday <- weekdays(ModelMerge$datetime)
+
+#Now to remove repeated records of indidivuals on a given day
+ModelMerge$DateOnly <- as.Date(ModelMerge$datetime)
+OnceADay <- ModelMerge[!duplicated(ModelMerge[,c("Unlinked_ID","DateOnly")]),]
+dim(OnceADay) #Wow most individuals had many seizures per day!
+
+#Gender appears to be a problem:
+summary(OnceADay$m1f0)
+they <- OnceADay[duplicated(OnceADay[,"Unlinked_ID"]),c("Unlinked_ID","m1f0")]
+they[is.na(they$m1f0),"m1f0"] <- -9 #Had to make NA a value to see if there were any NA AND gendered folks
+table(they) #NOPE, so maybe we can just eliminate those individuals without a defined gender
+theydf <- as.data.frame(table(they))
+Nthey <- nrow(theydf[which(theydf$m1f0 == -9 & theydf$Freq > 0),])
+theySz <- sum(is.na(OnceADay$m1f0))
+print(paste("Only ",
+            Nthey,
+            " (",
+            signif(Nthey/length(unique(OnceADay$Unlinked_ID)),2),
+            "%)",
+            " individuals with ",
+            theySz,
+            " (",
+            signif(theySz/nrow(ModelMerge),2),
+            "%)",
+            " seizures that don't have a gender indicated...they'll be removed.",
+            sep=""))
+#removing those without a gender indicated
+OnceADay <- OnceADay[!is.na(OnceADay$m1f0),]
+
+#What is the distribution of my data?
+#library(MASS)
+qqp(unique(OnceADay$ScaledSzCount), "norm") 
+qqp(OnceADay$ScaledSzCount, "norm") #NOT normal
+qqp(unique(OnceADay$ScaledSzCount), "lnorm")
+qqp(OnceADay$ScaledSzCount, "lnorm") #NOT quite lognormal either, but closest
+#Because qqp requires estimates of the parameters of the negative binomial, Poisson
+# and gamma distributions. You can generate estimates using the fitdistr
+# function. Save the output and extract the estimates of each parameter as I
+# have shown below.
+#NOTE: can't do Poisson with the scaled data (non-integer)
+#NOTE: can't do the negative binomial as there is an absense of recording non-seizure days
+gamma <- fitdistr(OnceADay$ScaledSzCount, "gamma")
+qqp(OnceADay$ScaledSzCount, "gamma", shape = gamma$estimate[[1]], rate = gamma$estimate[[2]]) #NOT quite gamma either
+```
+  
+```{r account for non-reporting}
+uniquesofar <- OnceADay[which(OnceADay$DateOnly == min(OnceADay$DateOnly)),]
+uniquesofar$ScaledSzCount <- 0
+uniquesofar$ScaledSzBinary <- 0
+
+OnceADaygapless <- OnceADay[which(OnceADay$DateOnly == min(OnceADay$DateOnly)),]
+for(i in (min(OnceADay$DateOnly)+1):max(OnceADay$DateOnly)) {
+    add2unique <- OnceADay[which(OnceADay$DateOnly == as.Date(i)),]
+    IDsofar <- uniquesofar$Unlinked_ID
+    
+    IDtoday <- unique(add2unique$Unlinked_ID)
+    #Prep subset of unique to add to master (OnceADaygapless) 
+    add2master <- uniquesofar[!(uniquesofar$Unlinked_ID %in% IDtoday),]
+    add2master$datetime <- as.Date(i)
+    add2master$DSTday <- add2unique[1, "DSTday"]
+    add2master$RelativeDay <- add2unique[1, "RelativeDay"]
+    add2master$Year <- add2unique[1, "Year"]
+    add2master$Weekday <- add2unique[1, "Weekday"]
+    add2master$DateOnly <- as.Date(i)
+    add2master$age <- as.numeric(difftime(as.Date(i), add2master$DoB, unit="weeks"))/52.25
+    
+    #Add today's actual data to OnceADaygapless
+    OnceADaygapless <- rbind(OnceADaygapless, 
+                             OnceADay[which(OnceADay$DateOnly == as.Date(i)),])
+    #Then add unrepresented individuals back into master, to represent seizure-free days
+    OnceADaygapless <- rbind(OnceADaygapless, add2master)
+    
+    #Now update the unique list to account for new individuals
+    add2unique <- add2unique[!(add2unique$Unlinked_ID %in% IDsofar),]
+    if(nrow(add2unique) > 0) {
+        add2unique$ScaledSzBinary <- 0
+        add2unique$ScaledSzCount <- 0
+    }
+    
+    #Add the new individuals into the growing unique list
+    uniquesofar <- rbind(uniquesofar, add2unique)
+    print(paste("As of",as.Date(i),"there were",nrow(uniquesofar),"individuals represented."))
+}
+
+write.table(uniquesofar,"uniquesofar.txt",row.names = F, quote = F)
+write.table(OnceADaygapless,"OnceADaygapless.txt",row.names = F,quote = F)
+```
+  
+```{r create time lags from first presence of an ID for Bayesian/Poisson methods}
+forBPmodels <- OnceADay
+allIDs <- unique(forBPmodels$Unlinked_ID)
+for(i in allIDs) {
+    IDtime <- forBPmodels[which(forBPmodels$Unlinked_ID == i),c("Unlinked_ID","DateOnly")]
+    IDtime$lagFROMfirst <- as.numeric(IDtime$DateOnly - IDtime[1,"DateOnly"])
+    for(j in 1:nrow(IDtime)) {
+        forBPmodels[which(forBPmodels$Unlinked_ID == IDtime[j,"Unlinked_ID"] & 
+                              forBPmodels$DateOnly == IDtime[j,"DateOnly"]),"lagFROMfirst"] <- IDtime[j,"lagFROMfirst"]
+    }
+}
+write.table(forBPmodels,
+            file="IDs once a day with Poisson lags.txt",
+            row.names = F,
+            quote = F)
+#forBPmodels <- read.table("IDs once a day with Poisson lags.txt")
+plot(density(forBPmodels$lagFROMfirst))
+###THEN create data frame that has removed first seizures (i.e. 0) as that will bias the model? because seizures will always happen "immediately", because that's the only way to know when to start tracking an individual
+forBPno0 <- forBPmodels[which(forBPmodels$lagFROMfirst != 0),]
+plot(density(forBPno0$lagFROMfirst))
+
+Poistab <- as.data.frame(table(forBPno0$lagFROMfirst))
+poisson <- fitdistr(Poistab$Freq, "Poisson")
+qqp(Poistab$Freq, "pois", poisson$estimate) #DOESN'T actually fit a Poisson distribution that well
+```
+  
+```{r reviewer-requested tables}
+table1 <- data.frame("N"=numeric(),
+                     "ageM"=numeric(),
+                     "ageSD"=numeric(),
+                     "M"=numeric(),
+                     "F"=numeric(),
+                     "focal"=numeric(),
+                     "gen"=numeric(),
+                     "entriesM"=numeric(),
+                     "entriesSD"=numeric(),
+                     "entriesMed"=numeric(),
+                     "entries25"=numeric(),
+                     "entries75"=numeric(),
+                     "entriesMin"=numeric(),
+                     "entriesMax"=numeric(),
+                     "durM"=numeric(),
+                     "durSD"=numeric(),
+                     "durMed"=numeric(),
+                     "dur25"=numeric(),
+                     "dur75"=numeric(),
+                     "durMin"=numeric(),
+                     "durMax"=numeric(),
+                     stringsAsFactors = F)
+table2 <- data.frame("Year"=numeric(),
+                     "preDSTSzs"=numeric(),
+                     "preDSTreporters"=numeric(),
+                     "preDSTatrisk"=numeric(),
+                     "DSTSzs"=numeric(),
+                     "DSTreporters"=numeric(),
+                     "DSTatrisk"=numeric(),
+                     "postDSTSzs"=numeric(),
+                     "postDSTreporters"=numeric(),
+                     "postDSTatrisk"=numeric(),
+                     stringsAsFactors = F)
+
+fortables <- ModelMerge[order(ModelMerge$DateOnly),]
+fortables <- fortables[!duplicated(fortables$Unlinked_ID),]
+table1[1,"N"] <- nrow(fortables)
+table1[1,"ageM"] <- mean(fortables$age)
+table1[1,"ageSD"] <- sd(fortables$age)
+table1[1,"M"] <- sum(fortables$m1f0, na.rm = T)
+table1[1,"F"] <- length(na.omit(fortables$m1f0)) - sum(fortables$m1f0, na.rm = T)
+table1[1,"focal"] <- sum(fortables$focal, na.rm = T)
+table1[1,"gen"] <- sum(fortables$gen, na.rm = T)
+
+SZxID <- as.data.frame(table(ModelMerge$Unlinked_ID))
+table1[1,"entriesM"] <- mean(SZxID$Freq)
+table1[1,"entriesSD"] <- sd(SZxID$Freq)
+table1[1,"entriesMed"] <- median(SZxID$Freq)
+table1[1,"entries25"] <- quantile(SZxID$Freq, 0.25)[[1]]
+table1[1,"entries75"] <- quantile(SZxID$Freq, 0.75)[[1]]
+table1[1,"entriesMin"] <- min(SZxID$Freq)
+table1[1,"entriesMax"] <- max(SZxID$Freq)
+
+BPIDs <- unique(forBPno0$Unlinked_ID)
+singleSz <- forBPmodels[!which(forBPmodels$Unlinked_ID %in% BPIDs),]
+sum(!which(forBPmodels$Unlinked_ID %in% BPIDs)) #apparently everyone documents at least 2 seizures
+BP4tables <- forBPno0[order(forBPno0$DateOnly,decreasing = T),]
+BP4tables <- forBPno0[duplicated(forBPno0$Unlinked_ID),]
+table1[1,"durM"] <- mean(forBPno0$lagFROMfirst,na.rm=T)
+table1[1,"durSD"] <- sd(forBPno0$lagFROMfirst,na.rm=T)
+table1[1,"durMed"] <- median(forBPno0$lagFROMfirst,na.rm=T)
+table1[1,"dur25"] <- quantile(forBPno0$lagFROMfirst, 0.25, na.rm=T)[[1]]
+table1[1,"dur75"] <- quantile(forBPno0$lagFROMfirst, 0.75, na.rm=T)[[1]]
+table1[1,"durMin"] <- min(forBPno0$lagFROMfirst)
+table1[1,"durMax"] <- max(forBPno0$lagFROMfirst,na.rm=T)
+
+write.table(table1, file="ReviewerRequestedTable1.txt", row.names = F, quote = F)
+
+#USE Sz08to16* to get Saturday estimates of seizures reported that week (FreqperWEEK) and at risk
+index=1
+for(i in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
+    table2[index,"Year"] <- i
+    DSTon <- as.Date(ymd(paste(i,3,01,sep="-")))
+    DSTon <- as.Date(ifelse(wday(DSTon)==1,DSTon+7,DSTon+(15-wday(DSTon))))
+    preDSTend <- DSTon-1
+    table2[index,"preDSTSzs"] <- nrow(Sz08to16wkpreDST[which(year(Sz08to16wkpreDST$datetime) == i),])
+    table2[index,"preDSTreporters"] <- length(unique(Sz08to16wkpreDST[which(year(Sz08to16wkpreDST$datetime) == i),"Unlinked_ID"]))
+    table2[index,"preDSTatrisk"] <- nrow(uniquesofar[which(uniquesofar$DateOnly <= preDSTend),])
+    DSTend <- preDSTend + 7
+    table2[index,"DSTSzs"] <- nrow(Sz08to16wkofDST[which(year(Sz08to16wkofDST$datetime) == i),])
+    table2[index,"DSTreporters"] <- length(unique(Sz08to16wkofDST[which(year(Sz08to16wkofDST$datetime) == i),"Unlinked_ID"]))
+    table2[index,"DSTatrisk"] <- nrow(uniquesofar[which(uniquesofar$DateOnly <= DSTend),])
+    postDSTend <- DSTend + 7
+    table2[index,"postDSTSzs"] <- nrow(Sz08to16wkpostDST[which(year(Sz08to16wkpostDST$datetime) == i),])
+    table2[index,"postDSTreporters"] <- length(unique(Sz08to16wkpostDST[which(year(Sz08to16wkpostDST$datetime) == i),"Unlinked_ID"]))
+    table2[index,"postDSTatrisk"] <- nrow(uniquesofar[which(uniquesofar$DateOnly <= postDSTend),])
+    
+    index=index+1
+}
+
+write.table(table2, file="ReviewerRequestedTable2.txt", row.names = F, quote = F)
+```
+  
+```{r betas to ORs}
+get.or.se <- function(model) {
+  broom::tidy(model) %>% 
+    mutate(or = exp(Estimate),
+           var.diag = diag(vcov(model)),
+           or.se = sqrt(or^2 * var.diag)) %>%
+    select(or.se) %>% unlist %>% unname
+}
+```
+  
+```{r mixed modeling of all nonDST weekdays}
+wkdaylist <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
+loopiter = 0
+for(i in wkdaylist) {
+    compsub <- OnceADay[which(OnceADay$Weekday == i),]
+    nrow(OnceADay)/nrow(compsub) #just to check that we're getting the expected ~1/7th of the week
+    compsub$DSTyn <- ifelse(compsub$RelativeDay == loopiter, 1, 0) #only designate weekday in DST as 1
+    sum(compsub$DSTyn) #Total number of INDIVIDUALS who seized in DST week on weekday i
+    
+    #using these LMM methods: 
+    #http://ase.tufts.edu/gsc/gradresources/guidetomixedmodelsinr/mixed%20model%20guide.html
+    #library(lmer4)
+    lmm <- lmer(ScaledSzCount ~ DSTyn + m1f0 + focal + gen + age + (1 | Year),
+                data=compsub,
+                REML=F)
+    print(summary(lmm))
+    #library(car)
+    #print(Anova(lmm))
+    
+    #Using these methods to derive stats: 
+    #https://www.r-bloggers.com/three-ways-to-get-parameter-specific-p-values-from-lmer/
+    coefs <- data.frame(coef(summary(lmm)))
+    # use normal distribution to approximate p-value
+    coefs$p.z <- 2 * (1 - pnorm(abs(coefs$t.value)))
+    print(coefs)
+    
+    write.table(coefs,
+                file=paste("Adjusted LMM for scaled Sz on",i,"DST vs all non-DST.txt"),
+                quote=F)
+    
+    loopiter=loopiter+1
+}
+
+loopiter = 0
+for(i in wkdaylist) {
+    compsub <- OnceADaygapless[which(OnceADaygapless$Weekday == i),]
+    #nrow(OnceADay)/nrow(compsub) #just to check that we're getting the expected ~1/7th of the week
+    compsub$DSTyn <- ifelse(compsub$RelativeDay == loopiter, 1, 0) #only designate weekday in DST as 1
+
+#Now for the binarized outcome (required individuals to be represented as non-seizers as well):
+    logmodel <- glmer(ScaledSzBinary ~ DSTyn + m1f0 + focal + gen + age + (1 | Year),
+                data=compsub,
+                family = binomial(link = "logit"),
+                nAGQ = 25)
+    summary(logmodel)
+    
+    model.df <- as.data.frame(coef(summary(logmodel)))
+    #Getting ORs using:
+    #https://www.andrewheiss.com/blog/2016/04/25/convert-logistic-regression-standard-errors-to-odds-ratios-with-r/
+    model.df$OR <- exp(model.df$Estimate)  # Odds ratio/gradient
+    model.df$var.diag <- diag(vcov(logmodel))  # Variance of each coefficient
+    model.df$OR.se <- sqrt(model.df$OR^2 * model.df$var.diag)
+    
+    write.table(model.df,
+                file=paste("Adjusted OR for",i,"DST vs all non-DST.txt"),
+                row.names = T,
+                quote=F)
+}
+```
+  
+```{r mixed modeling of just preDST to DST}
+wkdaylist <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
+modelRs <- data.frame("Weekday"=character(),
+                      "R2mfull"=numeric(),
+                      "R2cfull"=numeric(),
+                      "R2mDST"=numeric(),
+                      "R2cDST"=numeric(),
+                      stringsAsFactors = F)
+loopiter = 0
+for(i in wkdaylist) {
+    compsub <- OnceADay[which(OnceADay$RelativeDay == (loopiter-7) | OnceADay$RelativeDay == loopiter),]
+    #just checking to make sure all of the days selected are the desired day of the week:
+    nrow(compsub) == nrow(compsub[which(compsub$Weekday == i),]) #if TRUE, they are
+    
+    compsub$DSTyn <- ifelse(compsub$RelativeDay == loopiter, 1, 0) #only designate weekday in DST as 1
+    sum(compsub$DSTyn) #Total number of INDIVIDUALS who seized in DST week on weekday i
+    
+    #using these LMM methods: http://ase.tufts.edu/gsc/gradresources/guidetomixedmodelsinr/mixed%20model%20guide.html
+    #library(lmer4)
+    lmm <- lmer(ScaledSzCount ~ DSTyn + m1f0 + focal + gen + age + (1 | Year),
+                data=compsub,
+                REML=F)
+    print(summary(lmm))
+    #library(car)
+    #print(Anova(lmm))
+    
+    lmm.Rs <- r.squaredGLMM(lmm)
+    
+    lmmDST <- lmer(ScaledSzCount ~ DSTyn + (1 | Year),
+                   data=compsub,
+                   REML=F)
+    
+    lmmDST.Rs <- r.squaredGLMM(lmmDST)
+    
+    theseRs <- as.data.frame(cbind(lmm.Rs,lmmDST.Rs))
+    names(theseRs) <- c("R2mfull","R2cfull","R2mDST","R2cDST")
+    forRs <- cbind("Weekday"=i,theseRs)
+    modelRs <- rbind(modelRs,forRs)
+    
+    #Using these methods to derive stats: https://www.r-bloggers.com/three-ways-to-get-parameter-specific-p-values-from-lmer/
+    coefs <- data.frame(coef(summary(lmm)))
+    # use normal distribution to approximate p-value
+    coefs$p.z <- 2 * (1 - pnorm(abs(coefs$t.value)))
+    print(coefs)
+    
+    write.table(coefs,
+                file=paste("Adjusted LMM for scaled Sz on",i,"DST vs preDST.txt"),
+                quote=F)
+    
+    loopiter=loopiter+1
+}
+write.table(modelRs,
+            file="R2 of adjusted LMM for scaled Sz on DST vs preDST.txt",
+            quote=F)
+
+modelRs <- data.frame("Weekday"=character(),
+                      "R2mfull"=numeric(),
+                      "R2cfull"=numeric(),
+                      "R2mDST"=numeric(),
+                      "R2cDST"=numeric(),
+                      stringsAsFactors = F)
+loopiter = 0
+for(i in wkdaylist) {
+    compsub <- OnceADaygapless[which(OnceADaygapless$RelativeDay == (loopiter-7) | OnceADaygapless$RelativeDay == loopiter),]
+    #nrow(OnceADaygapless)/nrow(compsub) #just to check that we're getting the expected ~1/7th of the week
+    compsub$DSTyn <- ifelse(compsub$RelativeDay == loopiter, 1, 0) #only designate weekday in DST as 1
+
+#Now for the binarized outcome (required individuals to be represented as non-seizers as well):
+    logmodel <- glmer(ScaledSzBinary ~ DSTyn + m1f0 + focal + gen + age + (1 | Year),
+                data=compsub,
+                family = binomial(link = "logit"),
+                nAGQ = 25)
+    summary(logmodel)
+    
+    log.Rs <- r.squaredGLMM(logmodel)
+    
+    logDST <- lmer(ScaledSzCount ~ DSTyn + (1 | Year),
+                   data=compsub,
+                   REML=F)
+    
+    logDST.Rs <- r.squaredGLMM(logDST)
+    
+    theseRs <- as.data.frame(cbind(as.data.frame(log.Rs)["theoretical",],logDST.Rs))
+    names(theseRs) <- c("R2mfull","R2cfull","R2mDST","R2cDST")
+    forRs <- cbind("Weekday"=i,theseRs)
+    modelRs <- rbind(modelRs,forRs)
+    
+    model.df <- as.data.frame(coef(summary(logmodel)))
+    #Getting ORs using:
+    #https://www.andrewheiss.com/blog/2016/04/25/convert-logistic-regression-standard-errors-to-odds-ratios-with-r/
+    model.df$OR <- exp(model.df$Estimate)  # Odds ratio/gradient
+    model.df$var.diag <- diag(vcov(logmodel))  # Variance of each coefficient
+    model.df$OR.se <- sqrt(model.df$OR^2 * model.df$var.diag)
+    
+    write.table(model.df,
+                file=paste("Adjusted OR for",i,"DST vs preDST.txt"),
+                row.names = T,
+                quote=F)
+    
+    loopiter=loopiter+1
+}   
+write.table(modelRs,
+            file="R2 of adjusted logistic model for DST vs preDST.txt",
+            quote=F)
+```
+  
+```{r mixed modeling of just postDST to DST}
+wkdaylist <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
+modelRs <- data.frame("Weekday"=character(),
+                      "R2mfull"=numeric(),
+                      "R2cfull"=numeric(),
+                      "R2mDST"=numeric(),
+                      "R2cDST"=numeric(),
+                      stringsAsFactors = F)
+loopiter = 0
+for(i in wkdaylist) {
+    compsub <- OnceADay[which(OnceADay$RelativeDay == (loopiter+7) | OnceADay$RelativeDay == loopiter),]
+    #just checking to make sure all of the days selected are the desired day of the week:
+    nrow(compsub) == nrow(compsub[which(compsub$Weekday == i),]) #if TRUE, they are
+    
+    compsub$DSTyn <- ifelse(compsub$RelativeDay == loopiter, 1, 0) #only designate weekday in DST as 1
+    sum(compsub$DSTyn) #Total number of INDIVIDUALS who seized in DST week on weekday i
+    
+    #using these LMM methods: http://ase.tufts.edu/gsc/gradresources/guidetomixedmodelsinr/mixed%20model%20guide.html
+    #library(lmer4)
+    lmm <- lmer(ScaledSzCount ~ DSTyn + m1f0 + focal + gen + age + (1 | Year),
+                data=compsub,
+                REML=F)
+    print(summary(lmm))
+    #library(car)
+    #print(Anova(lmm))
+    
+    lmm.Rs <- r.squaredGLMM(lmm)
+    
+    lmmDST <- lmer(ScaledSzCount ~ DSTyn + (1 | Year),
+                   data=compsub,
+                   REML=F)
+    
+    lmmDST.Rs <- r.squaredGLMM(lmmDST)
+    
+    theseRs <- as.data.frame(cbind(lmm.Rs,lmmDST.Rs))
+    names(theseRs) <- c("R2mfull","R2cfull","R2mDST","R2cDST")
+    forRs <- cbind("Weekday"=i,theseRs)
+    modelRs <- rbind(modelRs,forRs)
+    
+    #Using these methods to derive stats: https://www.r-bloggers.com/three-ways-to-get-parameter-specific-p-values-from-lmer/
+    coefs <- data.frame(coef(summary(lmm)))
+    # use normal distribution to approximate p-value
+    coefs$p.z <- 2 * (1 - pnorm(abs(coefs$t.value)))
+    print(coefs)
+    
+    write.table(coefs,
+                file=paste("Adjusted LMM for scaled Sz on",i,"DST vs postDST.txt"),
+                quote=F)
+    
+    loopiter=loopiter+1
+}
+write.table(modelRs,
+            file="R2 of adjusted LMM for scaled Sz on DST vs postDST.txt",
+            quote=F)
+
+modelRs <- data.frame("Weekday"=character(),
+                      "R2mfull"=numeric(),
+                      "R2cfull"=numeric(),
+                      "R2mDST"=numeric(),
+                      "R2cDST"=numeric(),
+                      stringsAsFactors = F)
+loopiter = 0
+for(i in wkdaylist) {
+    compsub <- OnceADaygapless[which(OnceADaygapless$RelativeDay == (loopiter+7) | OnceADaygapless$RelativeDay == loopiter),]
+    #nrow(OnceADaygapless)/nrow(compsub) #just to check that we're getting the expected ~1/7th of the week
+    compsub$DSTyn <- ifelse(compsub$RelativeDay == loopiter, 1, 0) #only designate weekday in DST as 1
+
+#Now for the binarized outcome (required individuals to be represented as non-seizers as well):
+    logmodel <- glmer(ScaledSzBinary ~ DSTyn + m1f0 + focal + gen + age + (1 | Year),
+                data=compsub,
+                family = binomial(link = "logit"),
+                nAGQ = 25)
+    summary(logmodel)
+    
+    log.Rs <- r.squaredGLMM(logmodel)
+    
+    logDST <- lmer(ScaledSzCount ~ DSTyn + (1 | Year),
+                   data=compsub,
+                   REML=F)
+    
+    logDST.Rs <- r.squaredGLMM(logDST)
+    
+    theseRs <- as.data.frame(cbind(as.data.frame(log.Rs)["theoretical",],logDST.Rs))
+    names(theseRs) <- c("R2mfull","R2cfull","R2mDST","R2cDST")
+    forRs <- cbind("Weekday"=i,theseRs)
+    modelRs <- rbind(modelRs,forRs)
+    
+    model.df <- as.data.frame(coef(summary(logmodel)))
+    #Getting ORs using:
+    #https://www.andrewheiss.com/blog/2016/04/25/convert-logistic-regression-standard-errors-to-odds-ratios-with-r/
+    model.df$OR <- exp(model.df$Estimate)  # Odds ratio/gradient
+    model.df$var.diag <- diag(vcov(logmodel))  # Variance of each coefficient
+    model.df$OR.se <- sqrt(model.df$OR^2 * model.df$var.diag)
+    
+    write.table(model.df,
+                file=paste("Adjusted OR for",i,"DST vs postDST.txt"),
+                quote=F)
+    
+    loopiter=loopiter+1
+} 
+write.table(modelRs,
+            file="R2 of adjusted logistic model for DST vs postDST.txt",
+            quote=F)
+```
+  
+```{r scratchpad of Bayesian stats, eval=FALSE, echo=FALSE}
+###SCRATCH
+    #USING:
+    #http://ase.tufts.edu/gsc/gradresources/guidetomixedmodelsinr/mixed%20model%20guide.html
+    #library(MCMCglmm)
+    prior = list(R = list(V = 1, n = 0, fix = 1),
+                 G = list(G1 = list(V = 1, n = 1),
+                          G2 = list(V = 1, n = 1),
+                          G3 = list(V = 1, n = 1),
+                          G4 = list(V = 1, n = 1),
+                          G5 = list(V = 1, n = 1),
+                          G6 = list(V = 1, n = 1)))
+    set.seed(101)
+    MCMC <- MCMCglmm(ScaledSzCount ~ 1,
+                     random = ~ DSTyn + m1f0 + focal + gen + age + Year,
+                     data = BPsub,
+                     family = "gaussian",
+                     prior = prior,
+                     verbose = FALSE)
+    summary(MCMC)
+    
+    #stan_nb <- stan_glm.nb(ScaledSzCount ~ DSTyn + m1f0 + focal + gen + age,
+    #                       data = BPsub,
+    #                       offset = log(lagFROMfirst),
+    #                       chains = CHAINS,
+    #                       seed = SEED,
+    #                       iter = ITERATIONS)
+    
+#Prep data Bayesian analysis
+    BPsub <- forBPno0[which(forBPno0$Weekday == i),]
+    nrow(forBPno0)/nrow(BPsub) #just to check that we're getting the expected ~1/7th of the week
+    BPsub$DSTyn <- ifelse(BPsub$RelativeDay == loopiter, 1, 0) #only designate weekday in DST as 1
+    sum(BPsub$DSTyn) #Total number of INDIVIDUALS who seized in DST week on weekday i
+    
+    #Bayesian hierarchical Poisson & Negative binomial modeling from:
+    #https://cran.r-project.org/web/packages/rstanarm/vignettes/count.html
+    #library(rstanarm)
+    #Standard GLM
+    glm1 <- glm(ScaledSzCount ~ DSTyn + m1f0 + focal + gen + age,
+                offset = log(lagFROMfirst),
+                data = BPsub, family = poisson(link = "log"))
+    #Estimate Bayesian version with stan_glm
+    SEED=101
+    CHAINS=4
+    ITERATIONS=1000
+    stan_glm1 <- stan_glm(round(ScaledSzCount*1000) ~ DSTyn + m1f0 + focal + gen + age, #note count data
+                          offset = log(lagFROMfirst),
+                          data = BPsub,
+                          family = poisson(link = "log"), 
+                          prior = normal(0,2.5),
+                          prior_intercept = normal(0,5),
+                          chains = CHAINS,
+                          seed = SEED,
+                          iter = ITERATIONS)
+    
+    round(rbind(glm = coef(glm1), stan_glm = coef(stan_glm1)), digits = 2)
+    round(rbind(glm = summary(glm1)$coefficients[, "Std. Error"], 
+                stan_glm = se(stan_glm1)), digits = 3)
+    
+    yrep <- posterior_predict(stan_glm1)
+    prop_zero <- function(y) mean(y == 0)
+    (prop_zero_test1 <- pp_check(stan_glm1, plotfun = "stat", stat = "prop_zero"))
+    
+    stan_glm2 <- update(stan_glm1, family = neg_binomial_2)
+    
+    stan_glm3 <- stan_glm(ScaledSzCount ~ DSTyn + m1f0 + focal + gen + age,
+                          data = BPsub,
+                          family = gaussian(link = "log"), 
+                          prior = normal(0,2.5),
+                          prior_intercept = normal(0,5),
+                          chains = CHAINS,
+                          seed = SEED,
+                          iter = ITERATIONS)
+    Boefs <- as.data.frame(summary(stan_glm3))
+    print(cbind(coefs, Boefs[1:nrow(coefs),]))
+```
+  
+Just another bit of fun looking at the data from an autocorrelation perspective (based on Coursera: Practical Time Series Analaysis)  
+```{r autocorrelation analysis with Yule-Walker}
+forTS <- Sz08to16[,c("datetime","FreqperDAY")]
+forTS$datetime <- as.Date(forTS$datetime,tz='America/Los_Angeles')
+#just a check that the Freq per day is all the same:
+forTS[which(forTS$datetime == "2008-05-16"),]
+uTS <- unique(forTS)
+head(uTS)
+uoTS <- uTS[order(uTS$datetime),]
+head(uoTS)
+ts08to16 <- ts(uoTS$FreqperDAY)
+plot(ts08to16, main=paste("Seizure frequencies from",
+                          min(uoTS$datetime),
+                          "to",
+                          max(uoTS$datetime)),
+     col='blue', lwd=1)
+#that spike is so completely unrealistic...check it out
+uoTS[which(uoTS$FreqperDAY > 4*sd(uoTS$FreqperDAY) & year(uoTS$datetime) == 2011),"FreqperDAY"] <- NA 
+#mean(uoTS[which(year(uoTS$datetime) == 2011),"FreqperDAY"]) #replaced with mean Sz counts for the year
+###Alternatively: can replace with NAs and then pass na.action=na.pass as an alternative strategy
+ts08to16 <- ts(uoTS$FreqperDAY)
+plot(ts08to16, main=paste("Seizure frequencies from",
+                          min(uoTS$datetime),
+                          "to",
+                          max(uoTS$datetime)),
+     col='blue', lwd=1)
+#much more believable...may have biased the other data
+
+#Assess if there is autocorrelation:
+Box.test(ts08to16, lag=log(length(ts08to16)))
+#p<0.05 (or whatever threshold chosen) is suggestive of autocorrelation
+
+plot(diff(ts08to16) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='')
+#should the diff be applied to log-transformed data? - yes, because of non-stationary trend over time.
+plot(diff(log(ts08to16)) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='')
+#Looks a bit better with log transform
+#Do we need to diff for seasonality? - nope, as the close inspection of the differenced log data doesn't appear to have seasonality:
+plot(diff(log(ts08to16)) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='', xlim=c(14500,15000))
+
+Box.test(diff(log(ts08to16)), lag=log(length(diff(ts08to16))))
+
+acf(diff(log(ts08to16)), main="ACF of differenced data", na.action = na.pass, 50)
+pacf(diff(log(ts08to16)), main="PACF of differenced data", na.action = na.pass, 50)
+
+#ARIMA modeling
+d=1 #Need to figure out how many difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
+pickarima <- data.frame("ARp"=numeric(),
+                        "diff"=numeric(),
+                        "MAq"=numeric(),
+                        "AIC"=numeric(),
+                        "SSE"=numeric(),
+                        "pval"=numeric())
+index=1
+for(p in 1:7){ #can pick the range of Ps after examining the PACF plot
+    for(q in 1:2){ #can pick the range of Qs after examining the ACF plot
+        if(p+d+q<=10){ 
+            model<-arima(x=ts08to16, order = c((p-1),d,(q-1)))
+            pval<-Box.test(model$residuals, lag=log(length(model$residuals)))
+            sse<-sum((model$residuals[!is.na(model$residuals)])^2)
+            cat(p-1,d,q-1, 'AIC=', model$aic, ' SSE=',sse,' p-VALUE=', pval$p.value,'\n')
+            pickarima[index,"ARp"] <- p-1
+            pickarima[index,"diff"] <- d
+            pickarima[index,"MAq"] <- q-1
+            pickarima[index,"AIC"] <- model$aic
+            pickarima[index,"SSE"] <- sse
+            pickarima[index,"pval"] <- pval$p.value
+        }
+        index=index+1
+    }
+}
+
+arima(diff(log(ts08to16)), order=c(pickarima[which(pickarima$AIC == min(pickarima$AIC)),"ARp"],
+                                   pickarima[which(pickarima$AIC == min(pickarima$AIC)),"diff"],
+                                   pickarima[which(pickarima$AIC == min(pickarima$AIC)),"MAq"]))
+
+#log-return of the data, given the trend
+ts08to16.log.return=diff(log(ts08to16))
+ts08to16.log.return.mean.zero=ts08to16.log.return-mean(ts08to16.log.return,na.rm = T)
+
+# Plots for log-returns
+par(mfrow=c(3,1))
+plot(ts08to16.log.return.mean.zero, main=paste("Log-return (mean zero) of seizure frequencies from",
+                                               min(uoTS$datetime),
+                                               "to",
+                                               max(uoTS$datetime)))
+acflim <- acf(ts08to16.log.return.mean.zero, main='ACF', na.action=na.pass, plot = F)
+ordinate <- sort(abs(acflim$acf), TRUE)[2] #finding first-order autocorrelation (0-order is always 1)
+acf(ts08to16.log.return.mean.zero, main='ACF', na.action=na.pass, ylim=c(-ordinate, ordinate))
+pacf(ts08to16.log.return.mean.zero, main='PACF', na.action=na.pass)
+
+# Order, based on the parial autocorrelation plot; choose the most parsimonious model (ie first drop into the noise range)
+p=6
+print("Note the optimal autocorrelation lag at about 1 week, and with harmonics about every 7 days")
+
+# sample autocorreleation function r
+r=NULL
+r[1:p]=acf(ts08to16.log.return.mean.zero, na.action=na.pass, plot=F)$acf[2:(p+1)]
+r
+
+# matrix R
+R=matrix(1,p,p) # matrix of dimension p by p, with entries all 1's.
+
+# define non-diagonal entires of R
+for(i in 1:p){
+    for(j in 1:p){
+        if(i!=j)
+            R[i,j]=r[abs(i-j)]
+    }
+}
+R
+
+# b-column vector on the right
+b=matrix(r,p,1)# b- column vector with no entries
+b
+
+phi.hat=solve(R,b)[,1]
+phi.hat
+
+# Variance estimation using Yule-Walker Estimator
+c0=acf(ts08to16.log.return.mean.zero, na.action=na.pass, type='covariance', plot=F)$acf[1]
+c0
+var.hat=c0*(1-sum(phi.hat*r))
+var.hat
+
+# Constant term in the model
+phi0.hat=mean(ts08to16.log.return, na.rm=T)*(1-sum(phi.hat))
+phi0.hat
+
+cat("Constant:", phi0.hat," Coeffcients:", phi.hat, " and Variance:", var.hat, '\n')
+
+#SARIMA modeling (adding in seasonality)
+d=1 #Need to figure out how many difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
+DD=1 #Need to figure out how many SEASONAL difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
+
+per=4 #What is the period of the seasonality...I would believe it's ~365 days (can inspect plots and look at the other seasonality papers from this data set and other seizure multi-dien papers)
+
+for(p in 1:2){
+  for(q in 1:2){
+    for(i in 1:2){
+      for(j in 1:2){
+        if(p+d+q+i+DD+j<=10){
+          model<-arima(x=log(ts08to16),
+                       order = c((p-1),d,(q-1)),
+                       seasonal = list(order=c((i-1), DD, (j-1)), period=per))
+          pval<-Box.test(model$residuals, lag=log(length(model$residuals)))
+          sse<-sum(model$residuals^2)
+          cat(p-1,d,q-1,i-1,DD,j-1,per, 'AIC=', model$aic, ' SSE=',sse,' p-VALUE=', pval$p.value,'\n')
+        }
+      }
+    }
+  }
+}
+#And the visuals:
+sarima(log(ts08to16), 0,d,1,1,DD,0,per) #Need to plug in the optimal p, q, P, and Q from the above loop
+
+```

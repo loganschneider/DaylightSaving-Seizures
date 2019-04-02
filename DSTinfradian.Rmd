@@ -1,7 +1,7 @@
 ---
-title: "DST analyses"
+title: "DSTinfradian"
 author: "Logan Schneider"
-date: "August 5, 2018"
+date: "2/6/2019"
 output: html_document
 ---
 
@@ -167,6 +167,165 @@ recombobulate <- c(4,2,6,7,5,1,3) #needed to reorder the alphabetical ordering d
 barplot(notDST[recombobulate])
 str(yday(Sz08to16notDST$datetime))
 ```
+  
+Just another bit of fun looking at the data from an autocorrelation perspective (based on Coursera: Practical Time Series Analaysi)  
+```{r autocorrelation analysis with Yule-Walker}
+forTS <- Sz08to16[,c("datetime","FreqperDAY")]
+forTS$datetime <- as.Date(forTS$datetime,tz='America/Los_Angeles')
+#just a check that the Freq per day is all the same:
+forTS[which(forTS$datetime == "2008-05-16"),]
+uTS <- unique(forTS)
+head(uTS)
+uoTS <- uTS[order(uTS$datetime),]
+head(uoTS)
+ts08to16 <- ts(uoTS$FreqperDAY)
+plot(ts08to16, main=paste("Seizure frequencies from",
+                          min(uoTS$datetime),
+                          "to",
+                          max(uoTS$datetime)),
+     col='blue', lwd=1)
+#that spike is so completely unrealistic...check it out
+uoTS[which(uoTS$FreqperDAY > 4*sd(uoTS$FreqperDAY) & year(uoTS$datetime) == 2011),"FreqperDAY"] <- NA 
+#mean(uoTS[which(year(uoTS$datetime) == 2011),"FreqperDAY"]) #replaced with mean Sz counts for the year
+###Alternatively: can replace with NAs and then pass na.action=na.pass as an alternative strategy
+ts08to16 <- ts(uoTS$FreqperDAY)
+plot(ts08to16, main=paste("Seizure frequencies from",
+                          min(uoTS$datetime),
+                          "to",
+                          max(uoTS$datetime)),
+     col='blue', lwd=1)
+#much more believable...may have biased the other data
+
+#Assess if there is autocorrelation:
+Box.test(ts08to16, lag=log(length(ts08to16)))
+#p<0.05 (or whatever threshold chosen) is suggestive of autocorrelation
+
+plot(diff(ts08to16) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='')
+#should the diff be applied to log-transformed data? - yes, because of non-stationary trend over time.
+plot(diff(log(ts08to16)) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='')
+#Looks a bit better with log transform
+#Do we need to diff for seasonality? - nope, as the close inspection of the differenced log data doesn't appear to have seasonality:
+plot(diff(log(ts08to16)) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='', xlim=c(14500,15000))
+
+Box.test(diff(log(ts08to16)), lag=log(length(diff(ts08to16))))
+
+acf(diff(log(ts08to16)), main="ACF of differenced data", na.action = na.pass, 50)
+pacf(diff(log(ts08to16)), main="PACF of differenced data", na.action = na.pass, 50)
+
+#ARIMA modeling
+d=1 #Need to figure out how many difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
+pickarima <- data.frame("ARp"=numeric(),
+                        "diff"=numeric(),
+                        "MAq"=numeric(),
+                        "AIC"=numeric(),
+                        "SSE"=numeric(),
+                        "pval"=numeric())
+index=1
+for(p in 1:7){ #can pick the range of Ps after examining the PACF plot
+    for(q in 1:2){ #can pick the range of Qs after examining the ACF plot
+        if(p+d+q<=10){ 
+            model<-arima(x=ts08to16, order = c((p-1),d,(q-1)))
+            pval<-Box.test(model$residuals, lag=log(length(model$residuals)))
+            sse<-sum((model$residuals[!is.na(model$residuals)])^2)
+            cat(p-1,d,q-1, 'AIC=', model$aic, ' SSE=',sse,' p-VALUE=', pval$p.value,'\n')
+            pickarima[index,"ARp"] <- p-1
+            pickarima[index,"diff"] <- d
+            pickarima[index,"MAq"] <- q-1
+            pickarima[index,"AIC"] <- model$aic
+            pickarima[index,"SSE"] <- sse
+            pickarima[index,"pval"] <- pval$p.value
+        }
+        index=index+1
+    }
+}
+
+arima(diff(log(ts08to16)), order=c(pickarima[which(pickarima$AIC == min(pickarima$AIC)),"ARp"],
+                                   pickarima[which(pickarima$AIC == min(pickarima$AIC)),"diff"],
+                                   pickarima[which(pickarima$AIC == min(pickarima$AIC)),"MAq"]))
+
+#log-return of the data, given the trend
+ts08to16.log.return=diff(log(ts08to16))
+ts08to16.log.return.mean.zero=ts08to16.log.return-mean(ts08to16.log.return,na.rm = T)
+
+# Plots for log-returns
+par(mfrow=c(3,1))
+plot(ts08to16.log.return.mean.zero, main=paste("Log-return (mean zero) of seizure frequencies from",
+                                               min(uoTS$datetime),
+                                               "to",
+                                               max(uoTS$datetime)))
+acflim <- acf(ts08to16.log.return.mean.zero, main='ACF', na.action=na.pass, plot = F)
+ordinate <- sort(abs(acflim$acf), TRUE)[2] #finding first-order autocorrelation (0-order is always 1)
+acf(ts08to16.log.return.mean.zero, main='ACF', na.action=na.pass, ylim=c(-ordinate, ordinate))
+pacf(ts08to16.log.return.mean.zero, main='PACF', na.action=na.pass)
+
+# Order, based on the parial autocorrelation plot; choose the most parsimonious model (ie first drop into the noise range)
+p=6
+print("Note the optimal autocorrelation lag at about 1 week, and with harmonics about every 7 days")
+
+# sample autocorreleation function r
+r=NULL
+r[1:p]=acf(ts08to16.log.return.mean.zero, na.action=na.pass, plot=F)$acf[2:(p+1)]
+r
+
+# matrix R
+R=matrix(1,p,p) # matrix of dimension p by p, with entries all 1's.
+
+# define non-diagonal entires of R
+for(i in 1:p){
+    for(j in 1:p){
+        if(i!=j)
+            R[i,j]=r[abs(i-j)]
+    }
+}
+R
+
+# b-column vector on the right
+b=matrix(r,p,1)# b- column vector with no entries
+b
+
+phi.hat=solve(R,b)[,1]
+phi.hat
+
+# Variance estimation using Yule-Walker Estimator
+c0=acf(ts08to16.log.return.mean.zero, na.action=na.pass, type='covariance', plot=F)$acf[1]
+c0
+var.hat=c0*(1-sum(phi.hat*r))
+var.hat
+
+# Constant term in the model
+phi0.hat=mean(ts08to16.log.return, na.rm=T)*(1-sum(phi.hat))
+phi0.hat
+
+cat("Constant:", phi0.hat," Coeffcients:", phi.hat, " and Variance:", var.hat, '\n')
+
+#SARIMA modeling (adding in seasonality)
+d=1 #Need to figure out how many difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
+DD=1 #Need to figure out how many SEASONAL difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
+
+per=4 #What is the period of the seasonality...I would believe it's ~365 days (can inspect plots and look at the other seasonality papers from this data set and other seizure multi-dien papers)
+
+for(p in 1:2){
+  for(q in 1:2){
+    for(i in 1:2){
+      for(j in 1:2){
+        if(p+d+q+i+DD+j<=10){
+          model<-arima(x=log(ts08to16),
+                       order = c((p-1),d,(q-1)),
+                       seasonal = list(order=c((i-1), DD, (j-1)), period=per))
+          pval<-Box.test(model$residuals, lag=log(length(model$residuals)))
+          sse<-sum(model$residuals^2)
+          cat(p-1,d,q-1,i-1,DD,j-1,per, 'AIC=', model$aic, ' SSE=',sse,' p-VALUE=', pval$p.value,'\n')
+        }
+      }
+    }
+  }
+}
+#And the visuals:
+sarima(log(ts08to16), 0,d,1,1,DD,0,per) #Need to plug in the optimal p, q, P, and Q from the above loop
+
+```
+  
+##TO DO: May want to do a hurdle analysis or, better yet, a zero-inflated negative binomial regression, zero-inflated Poisson regression (if not overdispersed), hurdle modeling, or the like using OnceADaygapless from DSTanalReviewer.Rmd: https://stats.idre.ucla.edu/r/dae/zinb/
   
 Comparisons to baseline windows  
 ###ANALYZED AS SO: chi square by day of the week, T-test (two tailed) by average day of the week, ORs  
@@ -3792,573 +3951,5 @@ compareweeks(firstweek=Sz08to16wkofST,
 ```
 
 ```{r scratchpad, eval=FALSE, echo=FALSE}
-###Prior compareweeks function (first function contents)###
-    #Get seizure counts for each day of the week in DST
-    #-this is tabulated BY DATE (i.e. all Sz on Sunday 2008-03-16)
-    #-this allows for independent t-tests (albeit suboptimal compared to paired t-tests)
-    SUNinDST <- firstweek[which(firstweek$wkday == "Sunday"),"datetime"]
-    SUNcount <- table(as.Date(SUNinDST))
-    SUNcountdf <- as.data.frame(SUNcount)
-    MONinDST <- firstweek[which(firstweek$wkday == "Monday"),"datetime"]
-    MONcount <- table(as.Date(MONinDST))
-    MONcountdf <- as.data.frame(MONcount)
-    TUEinDST <- firstweek[which(firstweek$wkday == "Tuesday"),"datetime"]
-    TUEcount <- table(as.Date(TUEinDST))
-    TUEcountdf <- as.data.frame(TUEcount)
-    WEDinDST <- firstweek[which(firstweek$wkday == "Wednesday"),"datetime"]
-    WEDcount <- table(as.Date(WEDinDST))
-    WEDcountdf <- as.data.frame(WEDcount)
-    THUinDST <- firstweek[which(firstweek$wkday == "Thursday"),"datetime"]
-    THUcount <- table(as.Date(THUinDST))
-    THUcountdf <- as.data.frame(THUcount)
-    FRIinDST <- firstweek[which(firstweek$wkday == "Friday"),"datetime"]
-    FRIcount <- table(as.Date(FRIinDST))
-    FRIcountdf <- as.data.frame(FRIcount)
-    SATinDST <- firstweek[which(firstweek$wkday == "Saturday"),"datetime"]
-    SATcount <- table(as.Date(SATinDST))
-    SATcountdf <- as.data.frame(SATcount)
-    
-    #Get seizure counts for each day of the week not in DST
-    #-this is tabulated BY DATE (i.e. all Sz on Sunday 2008-03-16)
-    SUNnonDST <- secondweek[which(secondweek$wkday == "Sunday"),"datetime"]
-    SUNcounts <- table(as.Date(SUNnonDST))
-    SUNcountsdf <- as.data.frame(SUNcounts)
-    MONnonDST <- secondweek[which(secondweek$wkday == "Monday"),"datetime"]
-    MONcounts <- table(as.Date(MONnonDST))
-    MONcountsdf <- as.data.frame(MONcounts)
-    TUEnonDST <- secondweek[which(secondweek$wkday == "Tuesday"),"datetime"]
-    TUEcounts <- table(as.Date(TUEnonDST))
-    TUEcountsdf <- as.data.frame(TUEcounts)
-    WEDnonDST <- secondweek[which(secondweek$wkday == "Wednesday"),"datetime"]
-    WEDcounts <- table(as.Date(WEDnonDST))
-    WEDcountsdf <- as.data.frame(WEDcounts)
-    THUnonDST <- secondweek[which(secondweek$wkday == "Thursday"),"datetime"]
-    THUcounts <- table(as.Date(THUnonDST))
-    THUcountsdf <- as.data.frame(THUcounts)
-    FRInonDST <- secondweek[which(secondweek$wkday == "Friday"),"datetime"]
-    FRIcounts <- table(as.Date(FRInonDST))
-    FRIcountsdf <- as.data.frame(FRIcounts)
-    SATnonDST <- secondweek[which(secondweek$wkday == "Saturday"),"datetime"]
-    SATcounts <- table(as.Date(SATnonDST))
-    SATcountsdf <- as.data.frame(SATcounts)
-    
-    #T-tests (x is for weekdays in DST, y is for comparison weeks):
-    print(SunT <- t.test(SUNcount,SUNcounts))
-    print(cohen.d(as.data.frame(SUNcount)$Freq,as.data.frame(SUNcounts)$Freq))
-    print(paste(wkone,"Sunday Sz counts 2008-2016 mean:",round(mean(as.data.frame(SUNcount)$Freq),2)))
-    print(paste(wkone,"Sunday Sz counts 2008-2016 SD:",round(sd(as.data.frame(SUNcount)$Freq),2)))
-    print(paste(wktwo,"Sunday Sz counts 2008-2016 mean:",round(mean(as.data.frame(SUNcounts)$Freq),2)))
-    print(paste(wktwo,"Sunday Sz counts 2008-2016 SD:",round(sd(as.data.frame(SUNcounts)$Freq),2)))
-    
-    print(MonT <- t.test(MONcount,MONcounts))
-    print(cohen.d(as.data.frame(MONcount)$Freq,as.data.frame(MONcounts)$Freq))
-    print(paste(wkone,"Monday Sz counts 2008-2016 mean:",round(mean(as.data.frame(MONcount)$Freq),2)))
-    print(paste(wkone,"Monday Sz counts 2008-2016 SD:",round(sd(as.data.frame(MONcount)$Freq),2)))
-    print(paste(wktwo,"Monday Sz counts 2008-2016 mean:",round(mean(as.data.frame(MONcounts)$Freq),2)))
-    print(paste(wktwo,"Monday Sz counts 2008-2016 SD:",round(sd(as.data.frame(MONcounts)$Freq),2)))
-    
-    print(TueT <- t.test(TUEcount,TUEcounts))
-    print(cohen.d(as.data.frame(TUEcount)$Freq,as.data.frame(TUEcounts)$Freq))
-    print(paste(wkone,"Tuesday Sz counts 2008-2016 mean:",round(mean(as.data.frame(TUEcount)$Freq),2)))
-    print(paste(wkone,"Tuesday Sz counts 2008-2016 SD:",round(sd(as.data.frame(TUEcount)$Freq),2)))
-    print(paste(wktwo,"Tuesday Sz counts 2008-2016 mean:",round(mean(as.data.frame(TUEcounts)$Freq),2)))
-    print(paste(wktwo,"Tuesday Sz counts 2008-2016 SD:",round(sd(as.data.frame(TUEcounts)$Freq),2)))
-    
-    print(WedT <- t.test(WEDcount,WEDcounts))
-    print(cohen.d(as.data.frame(WEDcount)$Freq,as.data.frame(WEDcounts)$Freq))
-    print(paste(wkone,"Wednesday Sz counts 2008-2016 mean:",round(mean(as.data.frame(WEDcount)$Freq),2)))
-    print(paste(wkone,"Wednesday Sz counts 2008-2016 SD:",round(sd(as.data.frame(WEDcount)$Freq),2)))
-    print(paste(wktwo,"Wednesday Sz counts 2008-2016 mean:",round(mean(as.data.frame(WEDcounts)$Freq),2)))
-    print(paste(wktwo,"Wednesday Sz counts 2008-2016 SD:",round(sd(as.data.frame(WEDcounts)$Freq),2)))
-    
-    print(ThuT <- t.test(THUcount,THUcounts))
-    print(cohen.d(as.data.frame(THUcount)$Freq,as.data.frame(THUcounts)$Freq))
-    print(paste(wkone,"Thursday Sz counts 2008-2016 mean:",round(mean(as.data.frame(THUcount)$Freq),2)))
-    print(paste(wkone,"Thursday Sz counts 2008-2016 SD:",round(sd(as.data.frame(THUcount)$Freq),2)))
-    print(paste(wktwo,"Thursday Sz counts 2008-2016 mean:",round(mean(as.data.frame(THUcounts)$Freq),2)))
-    print(paste(wktwo,"Thursday Sz counts 2008-2016 SD:",round(sd(as.data.frame(THUcounts)$Freq),2)))
-    
-    print(FriT <- t.test(FRIcount,FRIcounts))
-    print(cohen.d(as.data.frame(FRIcount)$Freq,as.data.frame(FRIcounts)$Freq))
-    print(paste(wkone,"Friday Sz counts 2008-2016 mean:",round(mean(as.data.frame(FRIcount)$Freq),2)))
-    print(paste(wkone,"Friday Sz counts 2008-2016 SD:",round(sd(as.data.frame(FRIcount)$Freq),2)))
-    print(paste(wktwo,"Friday Sz counts 2008-2016 mean:",round(mean(as.data.frame(FRIcounts)$Freq),2)))
-    print(paste(wktwo,"Friday Sz counts 2008-2016 SD:",round(sd(as.data.frame(FRIcounts)$Freq),2)))
-    
-    print(SatT <- t.test(SATcount,SATcounts))
-    print(cohen.d(as.data.frame(SATcount)$Freq,as.data.frame(SATcounts)$Freq))
-    print(paste(wkone,"Saturday Sz counts 2008-2016 mean:",round(mean(as.data.frame(SATcount)$Freq),2)))
-    print(paste(wkone,"Saturday Sz counts 2008-2016 SD:",round(sd(as.data.frame(SATcount)$Freq),2)))
-    print(paste(wktwo,"Saturday Sz counts 2008-2016 mean:",round(mean(as.data.frame(SATcounts)$Freq),2)))
-    print(paste(wktwo,"Saturday Sz counts 2008-2016 SD:",round(sd(as.data.frame(SATcounts)$Freq),2)))
-    
-    #Getting person-count approximate denominators and incidence rates for each day
-    # -note this denominator of person-time is inaccurate for multiple reasons:
-    #  +it counts people "at risk" only if they've documented a seizure - i.e. ascertainment bias for those reporting
-    #  +it doesn't account for single documenters that then stop using the app - also an ascertainment bias
-    #  +it doesn't account for interventions (i.e. surgery, changes in regimen), assuming similar risk over similar time periods
-    #  +it doesn't account for "voyeurs" - people who signed up, but haven't documented yet
-    
-    #Creating list of count data frames
-    l.df <- lapply(ls(pattern="[A-Z]countdf"), function(x) get(x))
-    l.df <- append(l.df, lapply(ls(pattern="[A-Z]countsdf"), function(x) get(x)))
-    #Getting names of environmental variables to name the list elements
-    DSTnames <- ls(pattern="[A-Z]countdf")
-    NONnames <- ls(pattern="[A-Z]countsdf")
-    listnames <- c(DSTnames,NONnames)
-    names(l.df) <- listnames
-    
-    for(i in listnames) {
-        #This will add in the relevant data
-        for(j in 1:nrow(l.df[[i]])) {
-            denomdf <- Sz08to16[which(Sz08to16$datetime <= as.Date(l.df[[i]][j,"Var1"])),"Unlinked_ID"]
-            l.df[[i]][j,"AtRisk"] <- length(unique(denomdf))
-            l.df[[i]][j,"Incidence"] <- l.df[[i]][j,"Freq"]/length(unique(denomdf))
-        }
-    }
-    
-    #For each non-DST data frame add in DST variables and calculate Rate Ratios
-    for(i in NONnames) {
-        DST4NON <- grep(paste("^",substr(i,1,3),sep=""),DSTnames,value=T) #Get name of comparable DST week
-        for(j in 1:nrow(l.df[[i]])) { #Iterate over dates in non-DST data frame
-            for(k in 1:nrow(l.df[[DST4NON]])) { #Iterate over dates in DST data frame to add comparisons to non-DST data frame
-                if(year(l.df[[i]][j,"Var1"]) == year(l.df[[DST4NON]][k,"Var1"])) { 
-                    l.df[[i]][j,"DSTFreq"] <- l.df[[DST4NON]][k,"Freq"] 
-                    l.df[[i]][j,"DSTAtRisk"] <- l.df[[DST4NON]][k,"AtRisk"] 
-                    l.df[[i]][j,"DSTIncidence"] <- l.df[[DST4NON]][k,"Incidence"] 
-                }
-            }
-        }
-        l.df[[i]][,"RateRatio"] <- l.df[[i]][,"DSTIncidence"]/l.df[[i]][,"Incidence"] #Calculate Rate Ratios
-    }
-    
-    #Put the new data frames back into the Global Environment
-    list2env(l.df,envir=.GlobalEnv)
-    
-    week2week <- data.frame("Weekday"=character(),
-                            "Year"=numeric(),
-                            "RateRatio"=numeric(),
-                            stringsAsFactors = F)
-    
-    for(i in list) {
-        weekdaydf <- grep(paste("^",substr(i,1,3),sep=""),NONnames,value=T,ignore.case=T)
-        for(j in min(year(Sz08to16$datetime)):max(year(Sz08to16$datetime))) {
-            FORweek2week <- data.frame("RateRatio"=l.df[[weekdaydf]][which(year(as.Date(l.df[[weekdaydf]][,"Var1"])) == j),"RateRatio"])
-            FORweek2week$"Weekday" <- i
-            FORweek2week$"Year" <- j
-            FORweek2week <- FORweek2week[,c(2,3,1)]
-            week2week <- rbind(week2week,FORweek2week)
-        }
-    }
-    
-    DSTbaseline=rep(1,max(week2week$Year)-min(week2week$Year)+1)
-    for(i in list) {
-        print(t.test(week2week[which(week2week$Weekday == i),"RateRatio"],DSTbaseline))
-        print(cohen.d(week2week[which(week2week$Weekday == i),"RateRatio"],DSTbaseline))
-        print(paste(wktwo,i,"rate ratios 2008-2016 mean:",
-                    round(mean(week2week[which(week2week$Weekday == i),"RateRatio"]),2)))
-        print(paste(wktwo,i,"rate ratios 2008-2016 SD:",
-                    round(sd(week2week[which(week2week$Weekday == i),"RateRatio"]),2)))
-        print(paste(wktwo,
-                    i,
-                    "rate ratio conidence interval:",
-                    round(mean(week2week[which(week2week$Weekday == i),"RateRatio"])-1.96*sd(week2week[which(week2week$Weekday == i),"RateRatio"])/sqrt(length(week2week[which(week2week$Weekday == i),"RateRatio"])),2),
-                    "to",
-                    round(mean(week2week[which(week2week$Weekday == i),"RateRatio"])+1.96*sd(week2week[which(week2week$Weekday == i),"RateRatio"])/sqrt(length(week2week[which(week2week$Weekday == i),"RateRatio"])),2)))
-    }
-    
-    factorlevels <- factor(list,levels=list)
-    week2week$Weekday <- factor(week2week$Weekday, levels = factorlevels) #Ensures Weekdays stay in the same order, despite coercing to factors
-    write.table(week2week,
-                file=paste("Weekday seizure Rate Ratios for ",wkone," compared to ",wktwo,".txt",sep=""),
-                quote = F,
-                row.names = F)
-    
-    #Now plot the rate ratios, by weekday
-    print(ggplot() + 
-        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
-        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
-                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
-                   linetype=3) + 
-        xlab("Weekday") +
-        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
-        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
-        theme_bw() + 
-        theme(legend.title = element_blank()))
-    
-    #The above demonstrates pretty extreme outliers (particularly in the first full year...possibly bias from high-documentation rates and low population counts)
-    # -Seems reasonable to remove those beyond 3 SD (particularly for the case of the whole-year-as-baseline comparisons)
-    week2week <- week2week[which(week2week$RateRatio > (mean(week2week$RateRatio)-3*sd(week2week$RateRatio)) & week2week$RateRatio < (mean(week2week$RateRatio)+3*sd(week2week$RateRatio))),]
-    
-    #Now plot the rate ratios again with extreme outliers removed
-    print(ggplot() + 
-        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
-        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
-                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
-                   linetype=3) + 
-        xlab("Weekday") +
-        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
-        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
-        theme_bw() + 
-        theme(legend.title = element_blank()))
-    
-    png(paste("Rate Ratios comparing ",wkone," and ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-        width = 9, 
-        height = 6, 
-        units = 'in', 
-        bg = "transparent", 
-        res = 300)
-    print(ggplot() + 
-        geom_boxplot(data=week2week[,c("Weekday","RateRatio")], aes(x=Weekday, y=RateRatio), fill="#4271AE", alpha=0.5, outlier.size=-1) + #Avoid duplicate outlier plotting
-        geom_point(data=week2week, aes(x=Weekday, y=RateRatio, color=factor(Year)), alpha=1, size=3) +
-        geom_hline(yintercept = mean(week2week$RateRatio,na.rm=T)) + 
-        geom_hline(yintercept = c(mean(week2week$RateRatio,na.rm=T)+1.96*sd(week2week$RateRatio,na.rm=T),
-                                  mean(week2week$RateRatio,na.rm=T)-1.96*sd(week2week$RateRatio,na.rm=T)),
-                   linetype=3) + 
-        xlab("Weekday") +
-        ylab(paste("Rate Ratio (Sz incidence in ",wkone," vs ",wktwo,")",sep="")) +
-        ggtitle(paste("Boxplot for seizure Rate Ratios comparing ",wkone," to ",wktwo," over ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) + 
-        theme_bw() + 
-        theme(legend.title = element_blank()))
-    dev.off()
-    
-    firstdf <- data.frame("Week"=character(),
-                          "Weekday"=character(),
-                          "Mean_Sz_count"=numeric(),
-                          "sd"=numeric(),
-                          "se"=numeric(),
-                          stringsAsFactors = F)
-    seconddf <- data.frame("Week"=character(),
-                           "Weekday"=character(),
-                           "Mean_Sz_count"=numeric(),
-                           "sd"=numeric(),
-                           "se"=numeric(),
-                           stringsAsFactors = F)
-    sigdf <- data.frame("Weekday"=character(),
-                        "p"=numeric(),
-                        "p.signif"=character(),
-                        stringsAsFactors = F)
-    
-    index=1
-    for(i in list) {
-        firstdf[index,"Week"] <- wkone
-        firstdf[index,"Weekday"] <- i
-        firstdf[index,"Mean_Sz_count"] <- mean(table(as.Date(firstweek[which(firstweek$wkday == i),"datetime"])))
-        firstdf[index,"sd"] <- sd(table(as.Date(firstweek[which(firstweek$wkday == i),"datetime"])))
-        firstdf[index,"se"] <- sd(table(as.Date(firstweek[which(firstweek$wkday == i),"datetime"])))/sqrt(table(firstweek$wkday)[[i]])
-        
-        seconddf[index,"Week"] <- wktwo
-        seconddf[index,"Weekday"] <- i
-        seconddf[index,"Mean_Sz_count"] <- mean(table(as.Date(secondweek[which(secondweek$wkday == i),"datetime"])))
-        seconddf[index,"sd"] <- sd(table(as.Date(secondweek[which(secondweek$wkday == i),"datetime"])))
-        seconddf[index,"se"] <- sd(table(as.Date(firstweek[which(firstweek$wkday == i),"datetime"])))/sqrt(table(secondweek$wkday)[[i]])
-        
-        sigdf[index,"Weekday"] <- i
-        sigdf[index,"p"] <- round(t.test(table(as.Date(firstweek[which(firstweek$wkday == i),"datetime"])),
-                                         table(as.Date(secondweek[which(secondweek$wkday == i),"datetime"])))[["p.value"]],4)
-        if(sigdf[index,"p"]<0.05 & sigdf[index,"p"]>0.01) {
-            sigdf[index,"p.signif"] <- "*"
-        } else if(sigdf[index,"p"]<0.01 & sigdf[index,"p"]>0.001) {
-            sigdf[index,"p.signif"] <- "**"
-        } else if(sigdf[index,"p"]<0.001) {
-            sigdf[index,"p.signif"] <- "***"
-        } else {
-            sigdf[index,"p.signif"] <- "ns"
-        }
-        
-        index=index+1
-    }
-    firstdf$Weekday <- factor(firstdf$Weekday, levels = firstdf$Weekday) #ensures weekdays stay in order Sun-Sat
-    seconddf$Weekday <- factor(seconddf$Weekday, levels = seconddf$Weekday) #ensures weekdays stay in order Sun-Sat
-    comparedf <- rbind(firstdf,seconddf)
-    
-    #To add significance markers can try method here: https://www.r-bloggers.com/add-p-values-and-significance-levels-to-ggplots/
-    #library(ggpubr)
-    
-    require(ggplot2)
-    png(paste("Comparison between ",wkone," and ",wktwo,".png",sep=""), 
-        width = 9, 
-        height = 6, 
-        units = 'in', 
-        bg = "transparent", 
-        res = 300)
-    print(ggplot(comparedf, aes(x=Weekday, y=Mean_Sz_count, fill=Week)) + 
-        geom_bar(position=position_dodge(), stat="identity",
-                 colour="black", # Use black outlines,
-                 size=.3) +      # Thinner lines
-        #stat_compare_means(aes(group = Week), label = "p.signif", label.y = 300)
-        geom_errorbar(aes(ymin=Mean_Sz_count-se, ymax=Mean_Sz_count+se),
-                      size=.3,    # Thinner lines
-                      width=.2,
-                      position=position_dodge(.9)) +
-        xlab("Weekday") +
-        ylab("Number of seizures (\u00b1SEM)") +
-        scale_fill_hue(name=paste(wkone,"vs",wktwo), # Legend label, use darker colors
-                       breaks=c(wkone, wktwo),
-                       labels=c(wkone, wktwo)) +
-        ggtitle("Comparison of seizures on a given weekday") +
-        scale_y_continuous(breaks=0:500*100) +
-        theme_bw())
-    dev.off()
-    
-    print(sigdf)
-    write.table(sigdf,file=paste("T-tests between ",wkone," and ",wktwo,".txt",sep=""),quote = F,row.names = F)
-###Prior compareweeks function (first function contents)###
-    
-###Old DST bar-plotted percentiles per year###
-    print(ggplot(Zweek[,c("Year","Percentile")], aes(x=Year, y=Percentile)) + 
-            geom_bar(position=position_dodge(), stat="identity",
-                     colour="black", # Use black outlines,
-                     size=.3) +      # Thinner lines
-            geom_hline(yintercept = wt.mean(Zweek$Percentile,Zweek$SzCount)) + 
-            geom_hline(yintercept = c(wt.mean(Zweek$Percentile,Zweek$SzCount)+wt.sd(Zweek$Percentile,Zweek$SzCount),
-                                      wt.mean(Zweek$Percentile,Zweek$SzCount)-wt.sd(Zweek$Percentile,Zweek$SzCount)),
-                       linetype=3) + 
-            xlab("Year") +
-            ylab("DST week's percentile") +
-            ggtitle(paste("Percentile of seizure counts for in a given year ",
-                          wkone,
-                          " from ",
-                          min(year(Sz08to16$datetime)),
-                          " to ",
-                          max(year(Sz08to16$datetime)),sep="")) +
-            scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
-            theme_bw())
-        
-        png(paste("Percentile of seizure counts for ",
-                  wkone,
-                  " per week from ",
-                  min(year(Sz08to16$datetime)),
-                  " to ",
-                  max(year(Sz08to16$datetime)),
-                  ".png",sep=""), 
-            width = 9, 
-            height = 6, 
-            units = 'in', 
-            bg = "transparent", 
-            res = 300)
-        print(ggplot(Zweek[,c("Year","Percentile")], aes(x=Year, y=Percentile)) + 
-            geom_bar(position=position_dodge(), stat="identity",
-                     colour="black", # Use black outlines,
-                     size=.3) +      # Thinner lines
-            geom_hline(yintercept = mean(Zweek$Percentile)) + 
-            geom_hline(yintercept = c(mean(Zweek$Percentile)+sd(Zweek$Percentile),
-                                      mean(Zweek$Percentile)-sd(Zweek$Percentile)),
-                       linetype=3) + 
-            xlab("Year") +
-            ylab("Percentile") +
-            ggtitle(paste("Percentile of seizure counts for ",wkone," per week from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),sep="")) +
-            scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
-            theme_bw())
-        dev.off()
-###Old bar-plotted DST percentiles per year###
-        
-###Old bar-plotted DST percentiles per weekday###
-print(ggplot(dailypercentiles, aes(x=Weekday, y=MeanPercentile)) + 
-    geom_bar(position=position_dodge(), stat="identity",
-             colour="black", # Use black outlines,
-             size=.3,  # Thinner lines
-             alpha=0.8) +  #Semi-transparent
-    #stat_compare_means(aes(group = Week), label = "p.signif", label.y = 300)
-    geom_errorbar(aes(ymin=MeanPercentile-PercentileSD, ymax=MeanPercentile+PercentileSD),
-                  size=.3,    # Thinner lines
-                  width=.2,
-                  position=position_dodge(.9)) +
-    geom_point(data=percentalls, aes(x=Weekday, y=Percentile, color=factor(Year)), size=3, alpha=0.8) + 
-    xlab("Weekday") +
-    ylab("Percentile (mean \u00b1 SD)") +
-    ggtitle(paste("Percentile of DST seizure counts by weekday over period from",
-                  min(year(Sz08to16$datetime)),
-                  "to",
-                  max(year(Sz08to16$datetime)))) +
-    scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
-    theme_bw() + 
-    theme(legend.title = element_blank()))
-
-png(paste("Percentile of DST seizure counts by weekday over period from ",min(year(Sz08to16$datetime))," to ",max(year(Sz08to16$datetime)),".png",sep=""), 
-    width = 9, 
-    height = 6, 
-    units = 'in', 
-    bg = "transparent", 
-    res = 300)
-print(ggplot(dailypercentiles, aes(x=Weekday, y=MeanPercentile)) + 
-    geom_bar(position=position_dodge(), stat="identity",
-             colour="black", # Use black outlines,
-             size=.3,  # Thinner lines
-             alpha=0.8) +  #Semi-transparent
-    #stat_compare_means(aes(group = Week), label = "p.signif", label.y = 300)
-    geom_errorbar(aes(ymin=MeanPercentile-PercentileSD, ymax=MeanPercentile+PercentileSD),
-                  size=.3,    # Thinner lines
-                  width=.2,
-                  position=position_dodge(.9)) +
-    geom_point(data=percentalls, aes(x=Weekday, y=Percentile, color=factor(Year)), size=3, alpha=0.8) + 
-    xlab("Weekday") +
-    ylab("Percentile (mean \u00b1 SD)") +
-    ggtitle(paste("Percentile of DST seizure counts by weekday over period from",min(year(Sz08to16$datetime)),"to",max(year(Sz08to16$datetime)))) +
-    scale_y_continuous(breaks=0:100*10, limits=c(0,100)) +
-    theme_bw() + 
-    theme(legend.title = element_blank()))
-dev.off()
-###Old bar-plotted percentiles per weekday###
-```
-  
-Just another bit of fun looking at the data from an autocorrelation perspective (based on Coursera: Practical Time Series Analaysi)  
-```{r autocorrelation analysis with Yule-Walker}
-forTS <- Sz08to16[,c("datetime","FreqperDAY")]
-forTS$datetime <- as.Date(forTS$datetime,tz='America/Los_Angeles')
-#just a check that the Freq per day is all the same:
-forTS[which(forTS$datetime == "2008-05-16"),]
-uTS <- unique(forTS)
-head(uTS)
-uoTS <- uTS[order(uTS$datetime),]
-head(uoTS)
-ts08to16 <- ts(uoTS$FreqperDAY)
-plot(ts08to16, main=paste("Seizure frequencies from",
-                          min(uoTS$datetime),
-                          "to",
-                          max(uoTS$datetime)),
-     col='blue', lwd=1)
-#that spike is so completely unrealistic...check it out
-uoTS[which(uoTS$FreqperDAY > 4*sd(uoTS$FreqperDAY) & year(uoTS$datetime) == 2011),"FreqperDAY"] <- NA 
-#mean(uoTS[which(year(uoTS$datetime) == 2011),"FreqperDAY"]) #replaced with mean Sz counts for the year
-###Alternatively: can replace with NAs and then pass na.action=na.pass as an alternative strategy
-ts08to16 <- ts(uoTS$FreqperDAY)
-plot(ts08to16, main=paste("Seizure frequencies from",
-                          min(uoTS$datetime),
-                          "to",
-                          max(uoTS$datetime)),
-     col='blue', lwd=1)
-#much more believable...may have biased the other data
-
-#Assess if there is autocorrelation:
-Box.test(ts08to16, lag=log(length(ts08to16)))
-#p<0.05 (or whatever threshold chosen) is suggestive of autocorrelation
-
-plot(diff(ts08to16) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='')
-#should the diff be applied to log-transformed data? - yes, because of non-stationary trend over time.
-plot(diff(log(ts08to16)) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='')
-#Looks a bit better with log transform
-#Do we need to diff for seasonality? - nope, as the close inspection of the differenced log data doesn't appear to have seasonality:
-plot(diff(log(ts08to16)) ~ uoTS$datetime[1:(nrow(uoTS)-1)], type="l", main="Differenced series", ylab='', xlab='', xlim=c(14500,15000))
-
-Box.test(diff(log(ts08to16)), lag=log(length(diff(ts08to16))))
-
-acf(diff(log(ts08to16)), main="ACF of differenced data", na.action = na.pass, 50)
-pacf(diff(log(ts08to16)), main="PACF of differenced data", na.action = na.pass, 50)
-
-#ARIMA modeling
-d=1 #Need to figure out how many difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
-pickarima <- data.frame("ARp"=numeric(),
-                        "diff"=numeric(),
-                        "MAq"=numeric(),
-                        "AIC"=numeric(),
-                        "SSE"=numeric(),
-                        "pval"=numeric())
-index=1
-for(p in 1:7){ #can pick the range of Ps after examining the PACF plot
-    for(q in 1:2){ #can pick the range of Qs after examining the ACF plot
-        if(p+d+q<=10){ 
-            model<-arima(x=ts08to16, order = c((p-1),d,(q-1)))
-            pval<-Box.test(model$residuals, lag=log(length(model$residuals)))
-            sse<-sum((model$residuals[!is.na(model$residuals)])^2)
-            cat(p-1,d,q-1, 'AIC=', model$aic, ' SSE=',sse,' p-VALUE=', pval$p.value,'\n')
-            pickarima[index,"ARp"] <- p-1
-            pickarima[index,"diff"] <- d
-            pickarima[index,"MAq"] <- q-1
-            pickarima[index,"AIC"] <- model$aic
-            pickarima[index,"SSE"] <- sse
-            pickarima[index,"pval"] <- pval$p.value
-        }
-        index=index+1
-    }
-}
-
-arima(diff(log(ts08to16)), order=c(pickarima[which(pickarima$AIC == min(pickarima$AIC)),"ARp"],
-                                   pickarima[which(pickarima$AIC == min(pickarima$AIC)),"diff"],
-                                   pickarima[which(pickarima$AIC == min(pickarima$AIC)),"MAq"]))
-
-#log-return of the data, given the trend
-ts08to16.log.return=diff(log(ts08to16))
-ts08to16.log.return.mean.zero=ts08to16.log.return-mean(ts08to16.log.return,na.rm = T)
-
-# Plots for log-returns
-par(mfrow=c(3,1))
-plot(ts08to16.log.return.mean.zero, main=paste("Log-return (mean zero) of seizure frequencies from",
-                                               min(uoTS$datetime),
-                                               "to",
-                                               max(uoTS$datetime)))
-acflim <- acf(ts08to16.log.return.mean.zero, main='ACF', na.action=na.pass, plot = F)
-ordinate <- sort(abs(acflim$acf), TRUE)[2] #finding first-order autocorrelation (0-order is always 1)
-acf(ts08to16.log.return.mean.zero, main='ACF', na.action=na.pass, ylim=c(-ordinate, ordinate))
-pacf(ts08to16.log.return.mean.zero, main='PACF', na.action=na.pass)
-
-# Order, based on the parial autocorrelation plot; choose the most parsimonious model (ie first drop into the noise range)
-p=6
-print("Note the optimal autocorrelation lag at about 1 week, and with harmonics about every 7 days")
-
-# sample autocorreleation function r
-r=NULL
-r[1:p]=acf(ts08to16.log.return.mean.zero, na.action=na.pass, plot=F)$acf[2:(p+1)]
-r
-
-# matrix R
-R=matrix(1,p,p) # matrix of dimension p by p, with entries all 1's.
-
-# define non-diagonal entires of R
-for(i in 1:p){
-    for(j in 1:p){
-        if(i!=j)
-            R[i,j]=r[abs(i-j)]
-    }
-}
-R
-
-# b-column vector on the right
-b=matrix(r,p,1)# b- column vector with no entries
-b
-
-phi.hat=solve(R,b)[,1]
-phi.hat
-
-# Variance estimation using Yule-Walker Estimator
-c0=acf(ts08to16.log.return.mean.zero, na.action=na.pass, type='covariance', plot=F)$acf[1]
-c0
-var.hat=c0*(1-sum(phi.hat*r))
-var.hat
-
-# Constant term in the model
-phi0.hat=mean(ts08to16.log.return, na.rm=T)*(1-sum(phi.hat))
-phi0.hat
-
-cat("Constant:", phi0.hat," Coeffcients:", phi.hat, " and Variance:", var.hat, '\n')
-
-#SARIMA modeling (adding in seasonality)
-d=1 #Need to figure out how many difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
-DD=1 #Need to figure out how many SEASONAL difference measures to include...1 is appropriate as the single difference seemed to mitigate any non-stationarity
-
-per=4 #What is the period of the seasonality...I would believe it's ~365 days (can inspect plots and look at the other seasonality papers from this data set and other seizure multi-dien papers)
-
-for(p in 1:2){
-  for(q in 1:2){
-    for(i in 1:2){
-      for(j in 1:2){
-        if(p+d+q+i+DD+j<=10){
-          model<-arima(x=log(ts08to16),
-                       order = c((p-1),d,(q-1)),
-                       seasonal = list(order=c((i-1), DD, (j-1)), period=per))
-          pval<-Box.test(model$residuals, lag=log(length(model$residuals)))
-          sse<-sum(model$residuals^2)
-          cat(p-1,d,q-1,i-1,DD,j-1,per, 'AIC=', model$aic, ' SSE=',sse,' p-VALUE=', pval$p.value,'\n')
-        }
-      }
-    }
-  }
-}
-#And the visuals:
-sarima(log(ts08to16), 0,d,1,1,DD,0,per) #Need to plug in the optimal p, q, P, and Q from the above loop
 
 ```
